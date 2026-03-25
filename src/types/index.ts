@@ -26,7 +26,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
-  model?: 'claude' | 'gpt';
+  model?: 'gpt';
 }
 
 export interface Highlight {

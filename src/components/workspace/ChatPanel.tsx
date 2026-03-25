@@ -1,26 +1,71 @@
 'use client';
 
 import { useState } from 'react';
-import { Send, BookOpen, Link2, Sparkles } from 'lucide-react';
+import { Send, BookOpen, Link2, Sparkles, Loader2 } from 'lucide-react';
 import { mockChatMessages } from '@/lib/mock-data';
-
-type ModelType = 'claude' | 'gpt';
 
 export function ChatPanel() {
   const [messages, setMessages] = useState(mockChatMessages);
   const [input, setInput] = useState('');
-  const [activeModel, setActiveModel] = useState<ModelType>('claude');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
-    const newMessage = {
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
+
+    const userMessage = {
       id: `c${Date.now()}`,
       role: 'user' as const,
       content: input,
       timestamp: new Date().toISOString(),
     };
-    setMessages([...messages, newMessage]);
+
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages);
     setInput('');
+    setIsLoading(true);
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: updatedMessages.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+        }),
+      });
+
+      const data = await res.json();
+
+      if (data.error) {
+        setMessages([...updatedMessages, {
+          id: `c${Date.now()}`,
+          role: 'assistant' as const,
+          content: `**Error:** ${data.error}`,
+          timestamp: new Date().toISOString(),
+          model: 'gpt' as const,
+        }]);
+      } else {
+        setMessages([...updatedMessages, {
+          id: `c${Date.now()}`,
+          role: 'assistant' as const,
+          content: data.content,
+          timestamp: new Date().toISOString(),
+          model: 'gpt' as const,
+        }]);
+      }
+    } catch {
+      setMessages([...updatedMessages, {
+        id: `c${Date.now()}`,
+        role: 'assistant' as const,
+        content: '**Error:** Failed to connect. Check your OpenAI connection in Settings.',
+        timestamp: new Date().toISOString(),
+        model: 'gpt' as const,
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -28,28 +73,9 @@ export function ChatPanel() {
       {/* Header */}
       <div className="px-5 py-4 flex items-center justify-between shrink-0">
         <h2 className="text-sm font-semibold text-on-surface">Research Assistant</h2>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setActiveModel('claude')}
-            className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors ${
-              activeModel === 'claude'
-                ? 'bg-orange-100 text-orange-700'
-                : 'text-on-surface-variant hover:bg-surface-container-high'
-            }`}
-          >
-            Claude 3.5
-          </button>
-          <button
-            onClick={() => setActiveModel('gpt')}
-            className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors ${
-              activeModel === 'gpt'
-                ? 'bg-emerald-100 text-emerald-700'
-                : 'text-on-surface-variant hover:bg-surface-container-high'
-            }`}
-          >
-            GPT-4o
-          </button>
-        </div>
+        <span className="px-2.5 py-1 rounded text-[11px] font-semibold bg-emerald-100 text-emerald-700">
+          GPT-4o
+        </span>
       </div>
 
       {/* Messages */}
@@ -72,7 +98,7 @@ export function ChatPanel() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-xs font-semibold text-on-surface uppercase">Claude</span>
+                    <span className="text-xs font-semibold text-on-surface uppercase">GPT-4o</span>
                   </div>
                   <div className="font-editorial text-sm text-on-surface leading-relaxed space-y-2">
                     {msg.content.split('\n\n').map((paragraph, i) => (
@@ -88,8 +114,20 @@ export function ChatPanel() {
           </div>
         ))}
 
+        {/* Loading indicator */}
+        {isLoading && (
+          <div className="flex gap-3">
+            <div className="w-7 h-7 rounded-full bg-surface-container flex items-center justify-center shrink-0 mt-0.5">
+              <Loader2 size={13} strokeWidth={2} className="text-on-surface-variant animate-spin" />
+            </div>
+            <div className="flex-1">
+              <span className="text-xs text-on-surface-variant">Thinking...</span>
+            </div>
+          </div>
+        )}
+
         {/* Quick actions after AI response */}
-        {messages.length > 0 && messages[messages.length - 1].role === 'assistant' && (
+        {messages.length > 0 && messages[messages.length - 1].role === 'assistant' && !isLoading && (
           <div className="flex gap-2 ml-10 pb-2">
             <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-container text-xs font-medium text-on-surface-variant hover:bg-surface-container-high transition-colors">
               <BookOpen size={12} strokeWidth={2} />
@@ -125,7 +163,8 @@ export function ChatPanel() {
             </button>
             <button
               onClick={handleSend}
-              className="w-8 h-8 rounded-lg bg-primary text-on-primary flex items-center justify-center hover:opacity-90 transition-opacity"
+              disabled={isLoading}
+              className="w-8 h-8 rounded-lg bg-primary text-on-primary flex items-center justify-center hover:opacity-90 transition-opacity disabled:opacity-50"
             >
               <Send size={14} strokeWidth={2} />
             </button>

@@ -130,6 +130,6 @@ export const mockChatMessages: ChatMessage[] = [
 
 According to the paper, this specific ratio is designed to minimize cognitive load by reducing the physical distance your eyes travel between reading and chatting. It aims to create a "focus state" where the auxiliary tool doesn't distract from the core research.`,
     timestamp: '2026-03-25T10:42:30Z',
-    model: 'claude',
+    model: 'gpt',
   },
 ];
