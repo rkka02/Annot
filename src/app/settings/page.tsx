@@ -3,6 +3,13 @@
 import { useState, useEffect } from 'react';
 import { LogIn, Server, Palette, Loader2, CheckCircle2, RefreshCw, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
+import {
+  DEFAULT_CHAT_FONT_SIZE,
+  MAX_CHAT_FONT_SIZE,
+  MIN_CHAT_FONT_SIZE,
+  readStoredChatFontSize,
+  writeStoredChatFontSize,
+} from '@/lib/chat-preferences';
 
 interface AuthStatus {
   authenticated: boolean;
@@ -16,9 +23,11 @@ interface AuthStatus {
 export default function SettingsPage() {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [chatFontSize, setChatFontSize] = useState(DEFAULT_CHAT_FONT_SIZE);
 
   useEffect(() => {
     void checkAuth();
+    setChatFontSize(readStoredChatFontSize());
   }, []);
 
   const checkAuth = async () => {
@@ -32,6 +41,11 @@ export default function SettingsPage() {
     } finally {
       setIsRefreshing(false);
     }
+  };
+
+  const handleChatFontSizeChange = (value: number) => {
+    const nextValue = writeStoredChatFontSize(value);
+    setChatFontSize(nextValue);
   };
 
   return (
@@ -145,7 +159,7 @@ export default function SettingsPage() {
             <Palette size={16} strokeWidth={2} className="text-on-surface-variant" />
             <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">Appearance</h2>
           </div>
-          <div className="bg-surface-container-lowest rounded-lg p-5">
+          <div className="bg-surface-container-lowest rounded-lg p-5 space-y-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-on-surface">Theme</p>
@@ -154,6 +168,40 @@ export default function SettingsPage() {
               <span className="px-3 py-1 rounded text-xs font-medium bg-surface-container text-on-surface-variant">
                 Default
               </span>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between gap-4 mb-2">
+                <div>
+                  <p className="text-sm font-medium text-on-surface">Chat font size</p>
+                  <p className="text-xs text-on-surface-variant mt-0.5">
+                    Adjust the reading size used in the chat panel.
+                  </p>
+                </div>
+                <span className="min-w-11 rounded bg-surface-container px-2 py-1 text-center text-xs font-semibold text-on-surface-variant">
+                  {chatFontSize}px
+                </span>
+              </div>
+
+              <input
+                type="range"
+                min={MIN_CHAT_FONT_SIZE}
+                max={MAX_CHAT_FONT_SIZE}
+                step={1}
+                value={chatFontSize}
+                onChange={(event) => handleChatFontSizeChange(Number(event.target.value))}
+                className="w-full accent-primary"
+              />
+
+              <div className="mt-3 rounded-xl bg-surface-container px-3 py-3">
+                <div className="text-[10px] uppercase tracking-wider text-outline mb-1">Preview</div>
+                <p
+                  className="font-editorial text-on-surface leading-relaxed"
+                  style={{ fontSize: `${chatFontSize}px` }}
+                >
+                  This is how assistant responses will look in the chat panel.
+                </p>
+              </div>
             </div>
           </div>
         </section>

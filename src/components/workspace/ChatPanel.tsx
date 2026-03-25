@@ -8,6 +8,11 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { useWorkspace } from '@/lib/workspace-store';
 import { ChatMessage, Session, SessionKind } from '@/types';
+import {
+  CHAT_FONT_SIZE_EVENT,
+  DEFAULT_CHAT_FONT_SIZE,
+  readStoredChatFontSize,
+} from '@/lib/chat-preferences';
 
 interface AvailableModel {
   id: string;
@@ -106,6 +111,7 @@ export function ChatPanel() {
   const [modelsLoading, setModelsLoading] = useState(true);
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const [thinkingDraft, setThinkingDraft] = useState('');
+  const [chatFontSize, setChatFontSize] = useState(DEFAULT_CHAT_FONT_SIZE);
   const pickerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const skipSessionHydrationRef = useRef<string | null>(null);
@@ -190,6 +196,30 @@ export function ChatPanel() {
   }, [applyVisibleSessionState]);
 
   useEffect(() => { fetchModels(); }, []);
+  useEffect(() => {
+    const syncChatFontSize = () => {
+      setChatFontSize(readStoredChatFontSize());
+    };
+
+    syncChatFontSize();
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key) {
+        syncChatFontSize();
+      }
+    };
+    const handleFontSizeEvent = () => {
+      syncChatFontSize();
+    };
+
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener(CHAT_FONT_SIZE_EVENT, handleFontSizeEvent);
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener(CHAT_FONT_SIZE_EVENT, handleFontSizeEvent);
+    };
+  }, []);
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -646,6 +676,12 @@ export function ChatPanel() {
     }));
   };
 
+  const assistantFontStyle = { fontSize: `${chatFontSize}px`, lineHeight: 1.7 };
+  const userFontStyle = { fontSize: `${chatFontSize}px`, lineHeight: 1.7 };
+  const inputFontStyle = { fontSize: `${chatFontSize}px`, lineHeight: 1.7 };
+  const codeFontSize = Math.max(11, chatFontSize - 2);
+  const codeFontStyle = { fontSize: `${codeFontSize}px` };
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -721,7 +757,7 @@ export function ChatPanel() {
             {msg.role === 'user' ? (
               <div className="flex justify-end">
                 <div className="max-w-[90%] bg-primary text-on-primary px-3.5 py-2.5 rounded-2xl rounded-tr-sm">
-                  <p className="text-[13px] leading-relaxed">{msg.content}</p>
+                  <p style={userFontStyle}>{msg.content}</p>
                 </div>
               </div>
             ) : (
@@ -730,7 +766,10 @@ export function ChatPanel() {
                   <Sparkles size={11} strokeWidth={2} className="text-on-surface-variant" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="chat-markdown font-editorial text-[13px] text-on-surface leading-relaxed">
+                  <div
+                    className="chat-markdown font-editorial text-on-surface"
+                    style={assistantFontStyle}
+                  >
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm, remarkMath]}
                       rehypePlugins={[rehypeKatex]}
@@ -744,14 +783,20 @@ export function ChatPanel() {
                           const isBlock = Boolean(className);
                           if (isBlock) {
                             return (
-                              <code className="block overflow-x-auto rounded-lg bg-surface-container px-3 py-2 font-functional text-[11px]">
+                              <code
+                                className="block overflow-x-auto rounded-lg bg-surface-container px-3 py-2 font-functional"
+                                style={codeFontStyle}
+                              >
                                 {children}
                               </code>
                             );
                           }
 
                           return (
-                            <code className="rounded bg-surface-container px-1.5 py-0.5 font-functional text-[11px]">
+                            <code
+                              className="rounded bg-surface-container px-1.5 py-0.5 font-functional"
+                              style={codeFontStyle}
+                            >
                               {children}
                             </code>
                           );
@@ -839,7 +884,8 @@ export function ChatPanel() {
             }}
             placeholder="Ask about your research..."
             rows={1}
-            className="flex-1 bg-transparent text-[13px] text-on-surface outline-none resize-none placeholder:text-outline font-editorial leading-relaxed"
+            className="flex-1 bg-transparent text-on-surface outline-none resize-none placeholder:text-outline font-editorial"
+            style={inputFontStyle}
           />
           <button
             onClick={handleSend}
