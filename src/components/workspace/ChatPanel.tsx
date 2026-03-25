@@ -14,6 +14,8 @@ import {
   readStoredChatFontSize,
 } from '@/lib/chat-preferences';
 
+const MAX_INPUT_HEIGHT = 180;
+
 interface AvailableModel {
   id: string;
   owned_by: string;
@@ -114,6 +116,7 @@ export function ChatPanel() {
   const [chatFontSize, setChatFontSize] = useState(DEFAULT_CHAT_FONT_SIZE);
   const pickerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const skipSessionHydrationRef = useRef<string | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const sessionUiMapRef = useRef<Record<string, SessionUiState>>({});
@@ -319,6 +322,18 @@ export function ChatPanel() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = '0px';
+    const nextHeight = Math.min(textarea.scrollHeight, MAX_INPUT_HEIGHT);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > MAX_INPUT_HEIGHT ? 'auto' : 'hidden';
+  }, [chatFontSize, input]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -877,6 +892,7 @@ export function ChatPanel() {
       <div className="px-4 py-3 shrink-0">
         <div className="flex items-end gap-2 bg-surface-container-low rounded-xl px-3 py-2.5">
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
