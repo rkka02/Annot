@@ -1,26 +1,115 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400;1,6..72,500&display=swap');
 @import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: 'Manrope', sans-serif;
+  --font-serif: 'Newsreader', serif;
+
+  /* Surface Hierarchy */
+  --color-surface: #f7fafc;
+  --color-surface-dim: #e1e9ed;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f0f5f8;
+  --color-surface-container: #e7eff3;
+  --color-surface-container-high: #dfe8ed;
+  --color-surface-container-highest: #d7e5eb;
+
+  /* Primary */
+  --color-primary: #585e6c;
+  --color-primary-dim: #4c5260;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #dce2f0;
+
+  /* Secondary */
+  --color-secondary: #5d5f65;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #e3e5ea;
+
+  /* Tertiary / Highlight */
+  --color-tertiary-fixed: #fcb259;
+  --color-on-tertiary-fixed: #3a2e00;
+
+  /* Error / Unknown highlight */
+  --color-error: #9f403d;
+  --color-error-container: #fe8983;
+  --color-on-error: #ffffff;
+
+  /* Text */
+  --color-on-surface: #283439;
+  --color-on-surface-variant: #6b7a82;
+  --color-outline: #8a969d;
+  --color-outline-variant: #c4cdd2;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  --background: #f7fafc;
+  --foreground: #283439;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: 'Manrope', sans-serif;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-outline-variant);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-outline);
+}
+
+/* Typography utilities */
+.font-editorial {
+  font-family: 'Newsreader', serif;
+}
+
+.font-functional {
+  font-family: 'Manrope', sans-serif;
+}
+
+/* Glass effect */
+.glass {
+  background: rgba(231, 239, 243, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Ghost border */
+.ghost-border {
+  border: 1px solid rgba(196, 205, 210, 0.15);
+}
+
+/* Highlight styles */
+.highlight-important {
+  background-color: rgba(252, 178, 89, 0.35);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.highlight-unknown {
+  background-color: rgba(254, 137, 131, 0.35);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* Ambient shadow for modals */
+.shadow-ambient {
+  box-shadow: 0 20px 40px rgba(40, 52, 57, 0.05);
+}
+
+/* Gradient button */
+.btn-gradient {
+  background: linear-gradient(135deg, #585e6c 0%, #4c5260 100%);
 }
