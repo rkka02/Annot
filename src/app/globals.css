@@ -113,3 +113,55 @@ body {
 .btn-gradient {
   background: linear-gradient(135deg, #585e6c 0%, #4c5260 100%);
 }
+
+.chat-markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35rem 0;
+}
+
+.chat-markdown code {
+  font-family: 'Manrope', sans-serif;
+}
+
+.pdf-page-shell {
+  position: relative;
+}
+
+.pdf-page-shell .react-pdf__Page__textContent {
+  user-select: text;
+  cursor: text;
+}
+
+.pdf-highlight-layer {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+}
+
+.pdf-highlight-layer--interactive {
+  pointer-events: auto;
+}
+
+.pdf-highlight-box {
+  position: absolute;
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+}
+
+.pdf-highlight-box--erasable {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.pdf-highlight-box--erasable:hover {
+  outline: 1px solid rgba(40, 52, 57, 0.28);
+}
+
+.pdf-highlight-box--important {
+  background: rgba(252, 178, 89, 0.32);
+}
+
+.pdf-highlight-box--unknown {
+  background: rgba(254, 137, 131, 0.28);
+}

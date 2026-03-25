@@ -12,13 +12,19 @@ export interface TreeNode {
 
 // ── Sessions ────────────────────────────────────────────────────
 
+export type SessionKind = 'folder' | 'pdf';
+
 export interface Session {
   id: string;
   folderPath: string;      // which folder this session belongs to
+  sessionKind: SessionKind;
+  pdfPath?: string;
   title: string;
   createdAt: string;
   updatedAt: string;
   messages: ChatMessage[];
+  codexSessionId?: string;
+  model?: string;
 }
 
 export interface ChatMessage {
@@ -37,6 +43,12 @@ export interface Highlight {
   page: number;
   type: 'important' | 'unknown';
   text: string;
+  rects?: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>;
   position: {
     x: number;
     y: number;

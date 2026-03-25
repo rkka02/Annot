@@ -1,25 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
+import { buildSessionTitle, createSession, getSession, listSessions, updateSession } from '@/lib/annot-sessions';
+import { SessionKind } from '@/types';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const SESSIONS_META = path.join(DATA_DIR, 'sessions.json');
-
-async function ensureDataDir() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  try {
-    await fs.access(SESSIONS_META);
-  } catch {
-    await fs.writeFile(SESSIONS_META, '[]');
+function parseSessionKind(value: string | null): SessionKind | undefined {
+  if (value === 'folder' || value === 'pdf') {
+    return value;
   }
+
+  return undefined;
 }
 
 // GET - List all sessions
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    await ensureDataDir();
-    const data = await fs.readFile(SESSIONS_META, 'utf-8');
-    return NextResponse.json(JSON.parse(data));
+    const folderPath = req.nextUrl.searchParams.get('folderPath');
+    const sessionId = req.nextUrl.searchParams.get('sessionId');
+    const sessionKind = parseSessionKind(req.nextUrl.searchParams.get('sessionKind'));
+    const pdfPath = req.nextUrl.searchParams.get('pdfPath');
+
+    if (!folderPath) {
+      return NextResponse.json({ error: 'folderPath is required' }, { status: 400 });
+    }
+
+    if (sessionId) {
+      const session = await getSession(folderPath, sessionId);
+      if (!session) {
+        return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+      }
+      return NextResponse.json(session);
+    }
+
+    return NextResponse.json(await listSessions(folderPath, {
+      sessionKind,
+      pdfPath,
+    }));
   } catch {
     return NextResponse.json([]);
   }
@@ -28,60 +42,75 @@ export async function GET() {
 // POST - Create a new session
 export async function POST(req: NextRequest) {
   try {
-    await ensureDataDir();
-
     const body = await req.json();
-    const { paperId, paperTitle, fileName } = body;
-
-    const id = crypto.randomUUID();
-    const newSession = {
-      id,
-      paperId,
-      paperTitle,
-      fileName,
-      summary: '',
-      tags: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      messages: [],
+    const { folderPath, title, model } = body as {
+      folderPath?: string;
+      title?: string;
+      model?: string;
+      sessionKind?: SessionKind;
+      pdfPath?: string | null;
     };
 
-    const data = await fs.readFile(SESSIONS_META, 'utf-8');
-    const sessions = JSON.parse(data);
-    sessions.push(newSession);
-    await fs.writeFile(SESSIONS_META, JSON.stringify(sessions, null, 2));
+    if (!folderPath) {
+      return NextResponse.json({ error: 'folderPath is required' }, { status: 400 });
+    }
+
+    const sessionKind = body?.sessionKind === 'pdf' ? 'pdf' : 'folder';
+    const pdfPath = typeof body?.pdfPath === 'string' ? body.pdfPath : null;
+
+    if (sessionKind === 'pdf' && !pdfPath) {
+      return NextResponse.json({ error: 'pdfPath is required for PDF sessions' }, { status: 400 });
+    }
+
+    const newSession = await createSession(
+      folderPath,
+      title?.trim() || buildSessionTitle(folderPath, sessionKind, pdfPath),
+      {
+        model,
+        sessionKind,
+        pdfPath,
+      },
+    );
 
     return NextResponse.json(newSession, { status: 201 });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
   }
 }
 
-// PUT - Update a session (add messages, update summary)
+// PUT - Update a session
 export async function PUT(req: NextRequest) {
   try {
-    await ensureDataDir();
-
     const body = await req.json();
-    const { id, messages, summary, tags } = body;
+    const {
+      folderPath,
+      id,
+      messages,
+      title,
+      codexSessionId,
+      model,
+    } = body as {
+      folderPath?: string;
+      id?: string;
+      messages?: unknown;
+      title?: string;
+      codexSessionId?: string;
+      model?: string;
+    };
 
-    const data = await fs.readFile(SESSIONS_META, 'utf-8');
-    const sessions = JSON.parse(data);
-    const index = sessions.findIndex((s: { id: string }) => s.id === id);
-
-    if (index === -1) {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    if (!folderPath || !id) {
+      return NextResponse.json({ error: 'folderPath and id are required' }, { status: 400 });
     }
 
-    if (messages) sessions[index].messages = messages;
-    if (summary) sessions[index].summary = summary;
-    if (tags) sessions[index].tags = tags;
-    sessions[index].updatedAt = new Date().toISOString();
+    const session = await updateSession(folderPath, id, {
+      messages: Array.isArray(messages) ? messages : undefined,
+      title,
+      codexSessionId,
+      model,
+    });
 
-    await fs.writeFile(SESSIONS_META, JSON.stringify(sessions, null, 2));
-
-    return NextResponse.json(sessions[index]);
-  } catch (error) {
+    return NextResponse.json(session);
+  } catch {
     return NextResponse.json({ error: 'Failed to update session' }, { status: 500 });
   }
 }

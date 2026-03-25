@@ -1,15 +1,92 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useWorkspace } from '@/lib/workspace-store';
-import { collectPdfs, mockSessions } from '@/lib/mock-data';
-import { FileText, MessageSquare, Plus, Clock } from 'lucide-react';
+import { collectPdfs } from '@/lib/tree-utils';
+import { FileText, MessageSquare, Clock, Loader2 } from 'lucide-react';
+import { Session } from '@/types';
 
 export function FolderView() {
   const { selectedNode, openPdf, openSession } = useWorkspace();
-  if (!selectedNode || selectedNode.type !== 'folder') return null;
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const isFolderSelected = selectedNode?.type === 'folder';
+  const folderPath = isFolderSelected ? selectedNode.path : null;
+  const pdfs = isFolderSelected ? collectPdfs(selectedNode) : [];
 
-  const pdfs = collectPdfs(selectedNode);
-  const sessions = mockSessions[selectedNode.path] ?? [];
+  useEffect(() => {
+    if (!folderPath) {
+      setSessions([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadSessions = async () => {
+      setSessionsLoading(true);
+      try {
+        const params = new URLSearchParams({
+          folderPath,
+          sessionKind: 'folder',
+        });
+        const res = await fetch(`/api/sessions?${params.toString()}`);
+        const data = await res.json();
+        if (!cancelled) {
+          setSessions(
+            Array.isArray(data)
+              ? data.filter((session): session is Session => (
+                typeof session === 'object' &&
+                session !== null &&
+                session.sessionKind === 'folder' &&
+                !session.pdfPath
+              ))
+              : [],
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setSessions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setSessionsLoading(false);
+        }
+      }
+    };
+
+    void loadSessions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [folderPath]);
+
+  if (!isFolderSelected) return null;
+
+  const handleCreateSession = async () => {
+    if (!folderPath) return;
+
+    setCreatingSession(true);
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderPath,
+          title: `${selectedNode.name} session`,
+          sessionKind: 'folder',
+        }),
+      });
+      const data = await res.json();
+      if (data?.id) {
+        setSessions((current) => [data, ...current]);
+        openSession(data);
+      }
+    } finally {
+      setCreatingSession(false);
+    }
+  };
 
   return (
     <div className="h-full overflow-y-auto">
@@ -31,14 +108,19 @@ export function FolderView() {
         {/* Start session */}
         <div className="mb-10">
           <button
-            onClick={() => openSession(selectedNode.path)}
+            onClick={() => void handleCreateSession()}
+            disabled={creatingSession}
             className="btn-gradient text-on-primary px-5 py-3 rounded-sm text-sm font-semibold flex items-center gap-2 hover:opacity-90 transition-opacity"
           >
-            <MessageSquare size={16} strokeWidth={2} />
-            Open Research Session
+            {creatingSession ? (
+              <Loader2 size={16} strokeWidth={2} className="animate-spin" />
+            ) : (
+              <MessageSquare size={16} strokeWidth={2} />
+            )}
+            {creatingSession ? 'Starting Session...' : 'Open Research Session'}
           </button>
           <p className="text-xs text-on-surface-variant mt-2">
-            AI will have access to {pdfs.length} PDF{pdfs.length !== 1 ? 's' : ''} in this folder and its subfolders.
+            AI starts from this folder context, but can inspect other workspace files if needed.
           </p>
         </div>
 
@@ -85,35 +167,42 @@ export function FolderView() {
         </section>
 
         {/* Recent sessions */}
-        {sessions.length > 0 && (
+        {(sessionsLoading || sessions.length > 0) && (
           <section>
             <h2 className="text-xs font-bold uppercase tracking-wider text-on-surface-variant mb-4">
               Previous Sessions
             </h2>
-            <div className="space-y-2">
-              {sessions.map((session) => (
-                <button
-                  key={session.id}
-                  onClick={() => openSession(selectedNode.path)}
-                  className="w-full bg-surface-container-lowest rounded-lg p-4 text-left hover:shadow-ambient transition-all group"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <h3 className="text-sm font-semibold text-on-surface group-hover:text-primary transition-colors">
-                      {session.title}
-                    </h3>
-                    <div className="flex items-center gap-1 text-outline">
-                      <Clock size={11} strokeWidth={2} />
-                      <span className="text-[10px]">
-                        {new Date(session.updatedAt).toLocaleDateString()}
-                      </span>
+            {sessionsLoading ? (
+              <div className="flex items-center gap-2 text-xs text-on-surface-variant">
+                <Loader2 size={12} className="animate-spin" />
+                Loading sessions...
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {sessions.map((session) => (
+                  <button
+                    key={session.id}
+                    onClick={() => openSession(session)}
+                    className="w-full bg-surface-container-lowest rounded-lg p-4 text-left hover:shadow-ambient transition-all group"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className="text-sm font-semibold text-on-surface group-hover:text-primary transition-colors">
+                        {session.title}
+                      </h3>
+                      <div className="flex items-center gap-1 text-outline">
+                        <Clock size={11} strokeWidth={2} />
+                        <span className="text-[10px]">
+                          {new Date(session.updatedAt).toLocaleDateString()}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                  <p className="text-xs text-on-surface-variant">
-                    {session.messages.length} messages
-                  </p>
-                </button>
-              ))}
-            </div>
+                    <p className="text-xs text-on-surface-variant">
+                      {session.messages.length} messages
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
           </section>
         )}
       </div>

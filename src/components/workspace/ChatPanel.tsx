@@ -1,9 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Send, BookOpen, Link2, Sparkles, Loader2, ChevronDown, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { useWorkspace } from '@/lib/workspace-store';
-import { mockChatMessages, mockTree, collectPdfs, findNode } from '@/lib/mock-data';
+import { ChatMessage, Session, SessionKind } from '@/types';
 
 interface AvailableModel {
   id: string;
@@ -12,23 +16,276 @@ interface AvailableModel {
   display_name?: string;
 }
 
+interface ToolUseEvent {
+  type: 'tool_use';
+  name?: string;
+  input?: string;
+}
+
+interface ToolResultEvent {
+  type: 'tool_result';
+  name?: string;
+  input?: string;
+  output?: string;
+  exitCode?: number | null;
+}
+
+interface StatusEvent {
+  type: 'status';
+  message?: string;
+}
+
+interface AssistantDeltaEvent {
+  type: 'assistant_delta';
+  text?: string;
+}
+
+interface FinalEvent {
+  type: 'final';
+  content?: string;
+  model?: string;
+  session?: Session;
+}
+
+interface ErrorEvent {
+  type: 'error';
+  message?: string;
+}
+
+type ChatStreamEvent =
+  | ToolUseEvent
+  | ToolResultEvent
+  | StatusEvent
+  | AssistantDeltaEvent
+  | FinalEvent
+  | ErrorEvent;
+
+interface SessionUiState {
+  isLoading: boolean;
+  sessionLoading: boolean;
+  thinkingOpen: boolean;
+  thinkingDraft: string;
+  messages: ChatMessage[];
+  selectedModel?: string;
+}
+
+function normalizeMathMarkdown(content: string): string {
+  return content
+    .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_, expression: string) => `\n$$\n${expression.trim()}\n$$\n`)
+    .replace(/\\\(\s*([\s\S]*?)\s*\\\)/g, (_, expression: string) => `$${expression.trim()}$`);
+}
+
+function createDefaultSessionUiState(): SessionUiState {
+  return {
+    isLoading: false,
+    sessionLoading: false,
+    thinkingOpen: false,
+    thinkingDraft: '',
+    messages: [],
+  };
+}
+
 export function ChatPanel() {
-  const { activeSessionFolder, toggleChat } = useWorkspace();
-  const [messages, setMessages] = useState(mockChatMessages);
+  const {
+    activeSessionFolder,
+    activeSessionKind,
+    activeSessionPdfPath,
+    activeSessionId,
+    activePdf,
+    openSession,
+    toggleChat,
+  } = useWorkspace();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [, setSessionUiMap] = useState<Record<string, SessionUiState>>({});
   const [models, setModels] = useState<AvailableModel[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(true);
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [thinkingDraft, setThinkingDraft] = useState('');
   const pickerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const skipSessionHydrationRef = useRef<string | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const sessionUiMapRef = useRef<Record<string, SessionUiState>>({});
 
-  // Compute PDFs in scope
-  const folderNode = activeSessionFolder ? findNode(mockTree, activeSessionFolder) : null;
-  const pdfsInScope = folderNode ? collectPdfs(folderNode) : [];
+  const sessionLabel = activeSessionKind === 'pdf' ? 'PDF Session' : 'Folder Session';
+  const buildSessionQuery = (
+    folderPath: string,
+    sessionKind: SessionKind,
+    pdfPath?: string | null,
+  ) => {
+    const params = new URLSearchParams({
+      folderPath,
+      sessionKind,
+    });
+
+    if (sessionKind === 'pdf' && pdfPath) {
+      params.set('pdfPath', pdfPath);
+    }
+
+    return params;
+  };
+
+  const pickLatestSession = (sessionList: unknown): Session | null => {
+    if (!Array.isArray(sessionList)) return null;
+
+    const sessions = sessionList.filter((item): item is Session => (
+      typeof item === 'object' &&
+      item !== null &&
+      'id' in item &&
+      'updatedAt' in item &&
+      'folderPath' in item &&
+      typeof item.id === 'string' &&
+      typeof item.updatedAt === 'string' &&
+      typeof item.folderPath === 'string'
+    ));
+
+    return sessions.sort((a, b) => (
+      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    ))[0] ?? null;
+  };
+
+  const applyVisibleSessionState = useCallback((state: SessionUiState) => {
+    setMessages(state.messages);
+    setIsLoading(state.isLoading);
+    setSessionLoading(state.sessionLoading);
+    setThinkingOpen(state.thinkingOpen);
+    setThinkingDraft(state.thinkingDraft);
+    if (state.selectedModel) {
+      setSelectedModel(state.selectedModel);
+    }
+  }, []);
+
+  const resetVisibleSessionState = useCallback(() => {
+    setMessages([]);
+    setIsLoading(false);
+    setSessionLoading(false);
+    setThinkingOpen(false);
+    setThinkingDraft('');
+  }, []);
+
+  const commitSessionUiState = useCallback((
+    sessionId: string,
+    updater: (current: SessionUiState) => SessionUiState,
+  ): SessionUiState => {
+    const current = sessionUiMapRef.current[sessionId] ?? createDefaultSessionUiState();
+    const nextState = updater(current);
+    const nextMap = {
+      ...sessionUiMapRef.current,
+      [sessionId]: nextState,
+    };
+
+    sessionUiMapRef.current = nextMap;
+    setSessionUiMap(nextMap);
+
+    if (activeSessionIdRef.current === sessionId) {
+      applyVisibleSessionState(nextState);
+    }
+
+    return nextState;
+  }, [applyVisibleSessionState]);
 
   useEffect(() => { fetchModels(); }, []);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    if (!activeSessionFolder || !activeSessionKind || activeSessionId) return;
+
+    let cancelled = false;
+
+    const attachLatestSession = async () => {
+      try {
+        const params = buildSessionQuery(activeSessionFolder, activeSessionKind, activeSessionPdfPath);
+        const res = await fetch(`/api/sessions?${params.toString()}`);
+        const data = await res.json();
+        const latestSession = pickLatestSession(data);
+
+        if (!cancelled && latestSession) {
+          openSession(latestSession);
+        }
+      } catch {
+        // Fall back to starting a new session on first send.
+      }
+    };
+
+    void attachLatestSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionFolder, activeSessionId, activeSessionKind, activeSessionPdfPath, openSession]);
+
+  useEffect(() => {
+    if (!activeSessionFolder || !activeSessionId) {
+      resetVisibleSessionState();
+      return;
+    }
+
+    const cachedSessionUi = sessionUiMapRef.current[activeSessionId];
+    if (cachedSessionUi) {
+      if (skipSessionHydrationRef.current === activeSessionId) {
+        skipSessionHydrationRef.current = null;
+      }
+      applyVisibleSessionState(cachedSessionUi);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadSession = async () => {
+      commitSessionUiState(activeSessionId, (current) => ({
+        ...current,
+        sessionLoading: true,
+      }));
+      try {
+        const params = new URLSearchParams({
+          folderPath: activeSessionFolder,
+          sessionId: activeSessionId,
+        });
+        const res = await fetch(`/api/sessions?${params.toString()}`);
+        const data = await res.json();
+        if (!cancelled) {
+          if (skipSessionHydrationRef.current === activeSessionId) {
+            skipSessionHydrationRef.current = null;
+            return;
+          }
+          commitSessionUiState(activeSessionId, (current) => ({
+            ...current,
+            messages: Array.isArray(data.messages) ? data.messages : [],
+            sessionLoading: false,
+            selectedModel: typeof data.model === 'string' && data.model ? data.model : current.selectedModel,
+          }));
+        }
+      } catch {
+        if (!cancelled) {
+          commitSessionUiState(activeSessionId, (current) => ({
+            ...current,
+            messages: [],
+            sessionLoading: false,
+          }));
+        }
+      }
+    };
+
+    void loadSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSessionFolder,
+    activeSessionId,
+    applyVisibleSessionState,
+    commitSessionUiState,
+    resetVisibleSessionState,
+  ]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -56,44 +313,319 @@ export function ChatPanel() {
     finally { setModelsLoading(false); }
   };
 
+  const ensureSessionId = async (): Promise<string> => {
+    if (activeSessionId) {
+      return activeSessionId;
+    }
+
+    if (!activeSessionFolder || !activeSessionKind) {
+      throw new Error('No active folder selected');
+    }
+
+    const params = buildSessionQuery(activeSessionFolder, activeSessionKind, activeSessionPdfPath);
+    const existingSessionsRes = await fetch(`/api/sessions?${params.toString()}`);
+    const existingSessions = await existingSessionsRes.json();
+    const latestSession = pickLatestSession(existingSessions);
+
+    if (latestSession) {
+      skipSessionHydrationRef.current = latestSession.id;
+      openSession(latestSession);
+      return latestSession.id;
+    }
+
+    const pdfSessionName = (activePdf?.name
+      || activeSessionPdfPath?.split('/').at(-1)
+      || 'PDF').replace(/\.pdf$/i, '');
+    const fallbackTitle = activeSessionKind === 'pdf' && activeSessionPdfPath
+      ? `${pdfSessionName} session`
+      : `${activeSessionFolder.split('/').filter(Boolean).at(-1) || 'Workspace'} session`;
+
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folderPath: activeSessionFolder,
+        title: fallbackTitle,
+        model: selectedModel || undefined,
+        sessionKind: activeSessionKind,
+        pdfPath: activeSessionKind === 'pdf' ? activeSessionPdfPath : null,
+      }),
+    });
+    const data = await res.json();
+
+    if (!res.ok || !data?.id) {
+      throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to start session');
+    }
+
+    skipSessionHydrationRef.current = data.id as string;
+    openSession(data as Session);
+    return data.id as string;
+  };
+
+  const normalizeComparableText = (value: string): string => (
+    value
+      .replace(/\r/g, '')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+      .toLowerCase()
+  );
+
+  const stripThinkingOverlap = (finalContent: string, liveDraft: string): string => {
+    const finalTrimmed = finalContent.trim();
+    const draftTrimmed = liveDraft.trim();
+
+    if (!draftTrimmed || !finalTrimmed) {
+      return finalContent;
+    }
+
+    const normalizedDraft = normalizeComparableText(draftTrimmed);
+    const normalizedFinal = normalizeComparableText(finalTrimmed);
+
+    if (normalizedFinal === normalizedDraft) {
+      return finalContent;
+    }
+
+    const draftBlocks = draftTrimmed
+      .split(/\n\s*\n+/)
+      .map((block) => block.trim())
+      .filter(Boolean)
+      .map((block) => normalizeComparableText(block));
+    const finalBlocks = finalTrimmed
+      .split(/\n\s*\n+/)
+      .map((block) => block.trim())
+      .filter(Boolean);
+
+    if (draftBlocks.length > 0 && finalBlocks.length > 1) {
+      let matchedBlockCount = 0;
+      for (const block of finalBlocks) {
+        const normalizedBlock = normalizeComparableText(block);
+        if (normalizedBlock.length < 40 || !draftBlocks.includes(normalizedBlock)) {
+          break;
+        }
+        matchedBlockCount += 1;
+      }
+
+      if (matchedBlockCount > 0 && matchedBlockCount < finalBlocks.length) {
+        return finalBlocks.slice(matchedBlockCount).join('\n\n').trim();
+      }
+    }
+
+    const draftLines = draftTrimmed
+      .split('\n')
+      .map((line) => normalizeComparableText(line))
+      .filter((line) => line.length >= 20);
+    const finalLines = finalTrimmed.split('\n');
+
+    if (draftLines.length > 0 && finalLines.length > 1) {
+      let matchedLineCount = 0;
+      for (const line of finalLines) {
+        const normalizedLine = normalizeComparableText(line);
+        if (normalizedLine.length < 20 || !draftLines.includes(normalizedLine)) {
+          break;
+        }
+        matchedLineCount += 1;
+      }
+
+      if (matchedLineCount > 0 && matchedLineCount < finalLines.length) {
+        return finalLines.slice(matchedLineCount).join('\n').trim();
+      }
+    }
+
+    if (finalTrimmed.startsWith(draftTrimmed) && finalTrimmed.length > draftTrimmed.length) {
+      const stripped = finalTrimmed.slice(draftTrimmed.length).trimStart();
+      return stripped || finalContent;
+    }
+
+    const normalizedFinalWords = finalTrimmed.split(/\s+/);
+    const normalizedDraftWords = draftTrimmed.split(/\s+/);
+
+    const draftWordString = normalizedDraftWords.join(' ');
+    const finalWordString = normalizedFinalWords.join(' ');
+
+    if (finalWordString.startsWith(draftWordString) && normalizedFinalWords.length > normalizedDraftWords.length) {
+      return normalizedFinalWords.slice(normalizedDraftWords.length).join(' ');
+    }
+
+    return finalContent;
+  };
+
+  const handleStreamEvent = (
+    sessionId: string,
+    event: ChatStreamEvent,
+    updatedMessages: ChatMessage[],
+    fallbackModel: string,
+  ) => {
+    if (event.type === 'status' || event.type === 'tool_use' || event.type === 'tool_result') {
+      return;
+    }
+
+    if (event.type === 'assistant_delta' && event.text) {
+      commitSessionUiState(sessionId, (current) => ({
+        ...current,
+        isLoading: true,
+        thinkingDraft: `${current.thinkingDraft}${event.text}`,
+      }));
+      return;
+    }
+
+    if (event.type === 'final') {
+      const currentUiState = sessionUiMapRef.current[sessionId] ?? createDefaultSessionUiState();
+      const finalContent = stripThinkingOverlap(event.content || '', currentUiState.thinkingDraft);
+
+      commitSessionUiState(sessionId, (current) => ({
+        ...current,
+        messages: [
+          ...updatedMessages,
+          {
+            id: `c${Date.now()}`,
+            role: 'assistant',
+            content: finalContent,
+            timestamp: new Date().toISOString(),
+            model: event.model || fallbackModel,
+          },
+        ],
+        isLoading: false,
+        sessionLoading: false,
+        thinkingDraft: '',
+        thinkingOpen: false,
+        selectedModel: event.model || fallbackModel,
+      }));
+      return;
+    }
+
+    if (event.type === 'error') {
+      commitSessionUiState(sessionId, (current) => ({
+        ...current,
+        messages: [
+          ...updatedMessages,
+          {
+            id: `c${Date.now()}`,
+            role: 'assistant',
+            content: `**Error:** ${event.message || 'Failed to connect. Check your Codex login in Settings.'}`,
+            timestamp: new Date().toISOString(),
+          },
+        ],
+        isLoading: false,
+        sessionLoading: false,
+        thinkingDraft: '',
+        thinkingOpen: false,
+      }));
+    }
+  };
+
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !activeSessionFolder || !activeSessionKind) return;
+    const prompt = input.trim();
+    setInput('');
+    let targetSessionId: string | null = null;
+
     const userMessage = {
       id: `c${Date.now()}`,
       role: 'user' as const,
-      content: input,
+      content: prompt,
       timestamp: new Date().toISOString(),
     };
-    const updated = [...messages, userMessage];
-    setMessages(updated);
-    setInput('');
-    setIsLoading(true);
 
     try {
+      const sessionId = await ensureSessionId();
+      targetSessionId = sessionId;
+      const updated = [...messages, userMessage];
+      commitSessionUiState(sessionId, (current) => ({
+        ...current,
+        messages: updated,
+        isLoading: true,
+        sessionLoading: false,
+        thinkingDraft: '',
+        thinkingOpen: false,
+        selectedModel: selectedModel || current.selectedModel,
+      }));
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: updated.map((m) => ({ role: m.role, content: m.content })),
+          folderPath: activeSessionFolder,
+          sessionId,
+          prompt: userMessage.content,
           model: selectedModel,
+          currentPdfPath: activeSessionKind === 'pdf'
+            ? (activeSessionPdfPath || activePdf?.path || null)
+            : (activePdf?.path || null),
         }),
       });
-      const data = await res.json();
-      setMessages([...updated, {
-        id: `c${Date.now()}`,
-        role: 'assistant' as const,
-        content: data.error ? `**Error:** ${data.error}` : data.content,
-        timestamp: new Date().toISOString(),
-        model: data.model || selectedModel,
-      }]);
-    } catch {
-      setMessages([...updated, {
-        id: `c${Date.now()}`,
-        role: 'assistant' as const,
-        content: '**Error:** Failed to connect. Check your Codex login in Settings.',
-        timestamp: new Date().toISOString(),
-      }]);
-    } finally { setIsLoading(false); }
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to connect.');
+      }
+
+      if (!res.body) {
+        throw new Error('Streaming response is not available.');
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex = buffer.indexOf('\n');
+
+        while (newlineIndex !== -1) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+
+          if (line) {
+            const event = JSON.parse(line) as ChatStreamEvent;
+            handleStreamEvent(sessionId, event, updated, selectedModel);
+          }
+
+          newlineIndex = buffer.indexOf('\n');
+        }
+      }
+
+      const trailing = buffer.trim();
+      if (trailing) {
+        const event = JSON.parse(trailing) as ChatStreamEvent;
+        handleStreamEvent(sessionId, event, updated, selectedModel);
+      }
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : 'Failed to connect. Check your Codex login in Settings.';
+      if (targetSessionId) {
+        commitSessionUiState(targetSessionId, (current) => ({
+          ...current,
+          messages: [
+            ...current.messages,
+            {
+              id: `c${Date.now()}`,
+              role: 'assistant' as const,
+              content: `**Error:** ${message}`,
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          isLoading: false,
+          sessionLoading: false,
+          thinkingDraft: '',
+          thinkingOpen: false,
+        }));
+      } else {
+        setMessages((current) => [...current, {
+          id: `c${Date.now()}`,
+          role: 'assistant' as const,
+          content: `**Error:** ${message}`,
+          timestamp: new Date().toISOString(),
+        }]);
+        setIsLoading(false);
+        setThinkingDraft('');
+        setThinkingOpen(false);
+      }
+    }
   };
 
   const displayName = (modelId: string) => {
@@ -102,22 +634,31 @@ export function ChatPanel() {
     return modelId.replace(/-\d{4}-\d{2}-\d{2}$/, '');
   };
 
+  const handleThinkingToggle = () => {
+    if (!activeSessionId) {
+      setThinkingOpen((current) => !current);
+      return;
+    }
+
+    commitSessionUiState(activeSessionId, (current) => ({
+      ...current,
+      thinkingOpen: !current.thinkingOpen,
+    }));
+  };
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="px-4 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-on-surface-variant">Session</h2>
-          <span className="text-[10px] text-outline truncate">
-            {pdfsInScope.length} PDF{pdfsInScope.length !== 1 ? 's' : ''} in scope
-          </span>
+          <h2 className="text-xs font-bold uppercase tracking-wider text-on-surface-variant">{sessionLabel}</h2>
         </div>
         <div className="flex items-center gap-1">
           {/* Model selector */}
           <div className="relative" ref={pickerRef}>
             <button
               onClick={() => setShowModelPicker(!showModelPicker)}
-              className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors"
+              className="flex min-w-28 items-center justify-between gap-2 rounded-md bg-emerald-100 px-3 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-200 transition-colors"
             >
               {modelsLoading ? (
                 <Loader2 size={10} className="animate-spin" />
@@ -158,6 +699,23 @@ export function ChatPanel() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 space-y-3">
+        {!activeSessionId && !sessionLoading && (
+          <div className="rounded-xl bg-surface-container px-3 py-2 text-xs text-on-surface-variant">
+            {activeSessionKind === 'pdf'
+              ? 'Your first message here will start or reopen a session for this PDF.'
+              : 'Your first message here will start or reopen a research session for this folder.'}
+          </div>
+        )}
+
+        {sessionLoading && messages.length === 0 && (
+          <div className="flex gap-2.5">
+            <div className="w-6 h-6 rounded-full bg-surface-container flex items-center justify-center shrink-0">
+              <Loader2 size={11} strokeWidth={2} className="text-on-surface-variant animate-spin" />
+            </div>
+            <span className="text-xs text-on-surface-variant mt-1">Loading session...</span>
+          </div>
+        )}
+
         {messages.map((msg) => (
           <div key={msg.id}>
             {msg.role === 'user' ? (
@@ -172,12 +730,42 @@ export function ChatPanel() {
                   <Sparkles size={11} strokeWidth={2} className="text-on-surface-variant" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-editorial text-[13px] text-on-surface leading-relaxed space-y-2">
-                    {msg.content.split('\n\n').map((paragraph, i) => (
-                      <p key={i} dangerouslySetInnerHTML={{
-                        __html: paragraph.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                      }} />
-                    ))}
+                  <div className="chat-markdown font-editorial text-[13px] text-on-surface leading-relaxed">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm, remarkMath]}
+                      rehypePlugins={[rehypeKatex]}
+                      components={{
+                        p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+                        ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
+                        ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+                        li: ({ children }) => <li>{children}</li>,
+                        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                        code: ({ children, className }) => {
+                          const isBlock = Boolean(className);
+                          if (isBlock) {
+                            return (
+                              <code className="block overflow-x-auto rounded-lg bg-surface-container px-3 py-2 font-functional text-[11px]">
+                                {children}
+                              </code>
+                            );
+                          }
+
+                          return (
+                            <code className="rounded bg-surface-container px-1.5 py-0.5 font-functional text-[11px]">
+                              {children}
+                            </code>
+                          );
+                        },
+                        pre: ({ children }) => <pre className="mb-3 last:mb-0">{children}</pre>,
+                        blockquote: ({ children }) => (
+                          <blockquote className="mb-3 border-l-2 border-outline-variant pl-3 text-on-surface-variant last:mb-0">
+                            {children}
+                          </blockquote>
+                        ),
+                      }}
+                    >
+                      {normalizeMathMarkdown(msg.content)}
+                    </ReactMarkdown>
                   </div>
                 </div>
               </div>
@@ -186,11 +774,41 @@ export function ChatPanel() {
         ))}
 
         {isLoading && (
-          <div className="flex gap-2.5">
-            <div className="w-6 h-6 rounded-full bg-surface-container flex items-center justify-center shrink-0">
-              <Loader2 size={11} strokeWidth={2} className="text-on-surface-variant animate-spin" />
-            </div>
-            <span className="text-xs text-on-surface-variant mt-1">Thinking...</span>
+          <div className="rounded-xl bg-surface-container px-3 py-2.5">
+            <button
+              onClick={handleThinkingToggle}
+              className="w-full flex items-center justify-between gap-3 text-left"
+            >
+              <div className="flex items-center gap-2">
+                <Loader2 size={12} strokeWidth={2} className="text-on-surface-variant animate-spin" />
+                <span className="text-xs font-medium text-on-surface-variant">Thinking</span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] text-outline">
+                {thinkingDraft ? 'Show details' : 'Waiting for output'}
+                <ChevronDown
+                  size={12}
+                  strokeWidth={2.5}
+                  className={`transition-transform ${thinkingOpen ? 'rotate-180' : ''}`}
+                />
+              </div>
+            </button>
+
+            {thinkingOpen && (
+              <div className="mt-3 border-t border-outline-variant/20 pt-3">
+                <div className="rounded-lg bg-surface-container-low px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-outline mb-1">
+                    Live Output
+                  </div>
+                  {thinkingDraft ? (
+                    <pre className="whitespace-pre-wrap break-words text-[11px] text-on-surface-variant font-functional">
+                      {thinkingDraft}
+                    </pre>
+                  ) : (
+                    <div className="text-[11px] text-outline">No live output yet.</div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -225,7 +843,7 @@ export function ChatPanel() {
           />
           <button
             onClick={handleSend}
-            disabled={isLoading || !selectedModel}
+            disabled={isLoading || !selectedModel || !activeSessionFolder || !activeSessionKind}
             className="w-7 h-7 rounded-lg bg-primary text-on-primary flex items-center justify-center hover:opacity-90 transition-opacity disabled:opacity-50 shrink-0"
           >
             <Send size={13} strokeWidth={2} />

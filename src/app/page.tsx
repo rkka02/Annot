@@ -1,21 +1,52 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import { TreeNode } from '@/types';
+import dynamic from 'next/dynamic';
+import { useState, useCallback, useEffect } from 'react';
+import { Session, TreeNode } from '@/types';
 import { WorkspaceContext, WorkspaceState } from '@/lib/workspace-store';
 import { TreeExplorer } from '@/components/tree/TreeExplorer';
 import { FolderView } from '@/components/workspace/FolderView';
-import { PdfViewer } from '@/components/workspace/PdfViewer';
 import { ChatPanel } from '@/components/workspace/ChatPanel';
 import { Topbar } from '@/components/layout/Topbar';
+import { findNode, getParentFolderPath } from '@/lib/tree-utils';
+
+const PdfViewer = dynamic(
+  () => import('@/components/workspace/PdfViewer').then((mod) => mod.PdfViewer),
+  { ssr: false },
+);
 
 export default function AppPage() {
   const [state, setState] = useState<WorkspaceState>({
+    treeRoot: null,
+    treeLoading: true,
     selectedNode: null,
     activePdf: null,
     activeSessionFolder: null,
+    activeSessionKind: null,
+    activeSessionPdfPath: null,
+    activeSessionId: null,
+    explorerOpen: true,
     chatOpen: false,
   });
+
+  const openPdfInContext = useCallback((currentState: WorkspaceState, pdf: TreeNode) => {
+    const parentFolderPath = getParentFolderPath(pdf);
+    const keepCurrentSession = (
+      currentState.activeSessionKind === 'pdf' &&
+      currentState.activeSessionPdfPath === pdf.path
+    );
+
+    return {
+      ...currentState,
+      selectedNode: pdf,
+      activePdf: pdf,
+      activeSessionFolder: parentFolderPath,
+      activeSessionKind: 'pdf' as const,
+      activeSessionPdfPath: pdf.path,
+      activeSessionId: keepCurrentSession ? currentState.activeSessionId : null,
+      chatOpen: keepCurrentSession ? currentState.chatOpen : false,
+    };
+  }, []);
 
   const selectNode = useCallback((node: TreeNode) => {
     if (node.type === 'folder') {
@@ -24,26 +55,27 @@ export default function AppPage() {
         selectedNode: node,
         activePdf: null,
         activeSessionFolder: node.path,
+        activeSessionKind: 'folder',
+        activeSessionPdfPath: null,
+        activeSessionId: null,
         chatOpen: false,
       }));
     } else {
-      // PDF clicked — open viewer, session stays on parent folder
-      setState((s) => ({
-        ...s,
-        selectedNode: node,
-        activePdf: node,
-      }));
+      setState((s) => openPdfInContext(s, node));
     }
-  }, []);
+  }, [openPdfInContext]);
 
   const openPdf = useCallback((pdf: TreeNode) => {
-    setState((s) => ({ ...s, activePdf: pdf, selectedNode: pdf }));
-  }, []);
+    setState((s) => openPdfInContext(s, pdf));
+  }, [openPdfInContext]);
 
-  const openSession = useCallback((folderPath: string) => {
+  const openSession = useCallback((session: Pick<Session, 'id' | 'folderPath' | 'sessionKind' | 'pdfPath'>) => {
     setState((s) => ({
       ...s,
-      activeSessionFolder: folderPath,
+      activeSessionFolder: session.folderPath,
+      activeSessionKind: session.sessionKind,
+      activeSessionPdfPath: session.pdfPath || null,
+      activeSessionId: session.id,
       chatOpen: true,
     }));
   }, []);
@@ -52,14 +84,93 @@ export default function AppPage() {
     setState((s) => ({ ...s, activePdf: null }));
   }, []);
 
+  const toggleExplorer = useCallback(() => {
+    setState((s) => ({ ...s, explorerOpen: !s.explorerOpen }));
+  }, []);
+
   const toggleChat = useCallback(() => {
     setState((s) => ({ ...s, chatOpen: !s.chatOpen }));
   }, []);
 
-  const ctx = { ...state, selectNode, openPdf, openSession, closePdf, toggleChat };
+  const refreshTree = useCallback(async () => {
+    const res = await fetch('/api/workspace/tree', { cache: 'no-store' });
+    const data = await res.json();
+
+    if (!res.ok || data?.error) {
+      throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to load workspace tree');
+    }
+
+    const nextTree = data as TreeNode;
+
+    setState((current) => {
+      const nextSelectedNode = current.selectedNode
+        ? findNode(nextTree, current.selectedNode.path)
+        : null;
+      const nextActivePdf = current.activePdf
+        ? findNode(nextTree, current.activePdf.path)
+        : null;
+
+      return {
+        ...current,
+        treeRoot: nextTree,
+        treeLoading: false,
+        selectedNode: nextSelectedNode,
+        activePdf: nextActivePdf?.type === 'pdf' ? nextActivePdf : null,
+        activeSessionPdfPath: nextActivePdf?.type === 'pdf'
+          ? nextActivePdf.path
+          : current.activeSessionPdfPath,
+      };
+    });
+
+    return nextTree;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTree = async () => {
+      try {
+        const res = await fetch('/api/workspace/tree', { cache: 'no-store' });
+        const data = await res.json();
+        if (!cancelled) {
+          if (!res.ok || data?.error) {
+            throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to load workspace tree');
+          }
+          setState((current) => ({
+            ...current,
+            treeRoot: data as TreeNode,
+            treeLoading: false,
+          }));
+        }
+      } catch {
+        if (!cancelled) {
+          setState((current) => ({
+            ...current,
+            treeRoot: {
+              id: 'root',
+              name: 'Annot',
+              type: 'folder',
+              path: '',
+              children: [],
+            },
+            treeLoading: false,
+          }));
+        }
+      }
+    };
+
+    void loadTree();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const ctx = { ...state, selectNode, openPdf, openSession, closePdf, toggleExplorer, toggleChat };
+  const contextValue = { ...ctx, refreshTree };
 
   return (
-    <WorkspaceContext value={ctx}>
+    <WorkspaceContext value={contextValue}>
       <div className="h-full flex flex-col">
         <Topbar />
         <div className="flex-1 flex overflow-hidden">
@@ -71,7 +182,7 @@ export default function AppPage() {
             {state.activePdf ? (
               // PDF is open — show viewer
               <div className={`flex-1 min-w-0 ${state.chatOpen ? '' : ''}`}>
-                <PdfViewer />
+                <PdfViewer key={state.activePdf.path} />
               </div>
             ) : state.selectedNode?.type === 'folder' ? (
               // Folder selected — show folder overview
