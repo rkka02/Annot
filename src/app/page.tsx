@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Session, TreeNode } from '@/types';
 import { WorkspaceContext, WorkspaceState } from '@/lib/workspace-store';
 import { TreeExplorer } from '@/components/tree/TreeExplorer';
@@ -14,6 +14,12 @@ const PdfViewer = dynamic(
   () => import('@/components/workspace/PdfViewer').then((mod) => mod.PdfViewer),
   { ssr: false },
 );
+
+const DEFAULT_CHAT_PANEL_WIDTH = 420;
+const MIN_CHAT_PANEL_WIDTH = 320;
+const MAX_CHAT_PANEL_WIDTH = 720;
+const MIN_MAIN_CONTENT_WIDTH = 360;
+const CHAT_PANEL_WIDTH_STORAGE_KEY = 'annot-chat-panel-width';
 
 export default function AppPage() {
   const [state, setState] = useState<WorkspaceState>({
@@ -28,6 +34,9 @@ export default function AppPage() {
     explorerOpen: true,
     chatOpen: false,
   });
+  const [chatPanelWidth, setChatPanelWidth] = useState(DEFAULT_CHAT_PANEL_WIDTH);
+  const [isResizingChat, setIsResizingChat] = useState(false);
+  const mainContentRef = useRef<HTMLDivElement>(null);
 
   const openPdfInContext = useCallback((currentState: WorkspaceState, pdf: TreeNode) => {
     const parentFolderPath = getParentFolderPath(pdf);
@@ -64,6 +73,19 @@ export default function AppPage() {
       setState((s) => openPdfInContext(s, node));
     }
   }, [openPdfInContext]);
+
+  const clearSelection = useCallback(() => {
+    setState((s) => ({
+      ...s,
+      selectedNode: null,
+      activePdf: null,
+      activeSessionFolder: null,
+      activeSessionKind: null,
+      activeSessionPdfPath: null,
+      activeSessionId: null,
+      chatOpen: false,
+    }));
+  }, []);
 
   const openPdf = useCallback((pdf: TreeNode) => {
     setState((s) => openPdfInContext(s, pdf));
@@ -141,6 +163,20 @@ export default function AppPage() {
   }, []);
 
   useEffect(() => {
+    const storedWidth = window.localStorage.getItem(CHAT_PANEL_WIDTH_STORAGE_KEY);
+    if (!storedWidth) return;
+
+    const parsedWidth = Number(storedWidth);
+    if (!Number.isFinite(parsedWidth)) return;
+
+    setChatPanelWidth(Math.max(MIN_CHAT_PANEL_WIDTH, Math.min(MAX_CHAT_PANEL_WIDTH, parsedWidth)));
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(CHAT_PANEL_WIDTH_STORAGE_KEY, String(chatPanelWidth));
+  }, [chatPanelWidth]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const loadTree = async () => {
@@ -181,7 +217,55 @@ export default function AppPage() {
     };
   }, []);
 
-  const ctx = { ...state, selectNode, openPdf, openSession, closePdf, toggleExplorer, toggleChat };
+  useEffect(() => {
+    if (!isResizingChat) {
+      return;
+    }
+
+    const handlePointerMove = (event: MouseEvent) => {
+      const mainContent = mainContentRef.current;
+      if (!mainContent) {
+        return;
+      }
+
+      const rect = mainContent.getBoundingClientRect();
+      const maxAllowedWidth = Math.max(
+        MIN_CHAT_PANEL_WIDTH,
+        Math.min(MAX_CHAT_PANEL_WIDTH, rect.width - MIN_MAIN_CONTENT_WIDTH),
+      );
+      const nextWidth = rect.right - event.clientX;
+      const clampedWidth = Math.min(Math.max(nextWidth, MIN_CHAT_PANEL_WIDTH), maxAllowedWidth);
+
+      setChatPanelWidth(clampedWidth);
+    };
+
+    const handlePointerUp = () => {
+      setIsResizingChat(false);
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('mouseup', handlePointerUp);
+
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handlePointerMove);
+      window.removeEventListener('mouseup', handlePointerUp);
+    };
+  }, [isResizingChat]);
+
+  const ctx = {
+    ...state,
+    selectNode,
+    clearSelection,
+    openPdf,
+    openSession,
+    closePdf,
+    toggleExplorer,
+    toggleChat,
+  };
   const contextValue = { ...ctx, refreshTree };
 
   return (
@@ -193,7 +277,7 @@ export default function AppPage() {
           <TreeExplorer />
 
           {/* Main Content Area */}
-          <div className="flex-1 flex min-w-0">
+          <div ref={mainContentRef} className="flex-1 flex min-w-0">
             {state.activePdf ? (
               // PDF is open — show viewer
               <div className={`flex-1 min-w-0 ${state.chatOpen ? '' : ''}`}>
@@ -219,9 +303,23 @@ export default function AppPage() {
 
             {/* Chat Panel */}
             {state.chatOpen && state.activeSessionFolder && (
-              <div className="w-[380px] shrink-0 bg-surface-container-lowest border-l border-outline-variant/10">
-                <ChatPanel />
-              </div>
+              <>
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize chat panel"
+                  onMouseDown={() => setIsResizingChat(true)}
+                  className="group relative w-2 shrink-0 cursor-col-resize bg-transparent"
+                >
+                  <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-outline-variant/20 transition-colors group-hover:bg-outline-variant/70" />
+                </div>
+                <div
+                  className="shrink-0 bg-surface-container-lowest border-l border-outline-variant/10"
+                  style={{ width: `${chatPanelWidth}px` }}
+                >
+                  <ChatPanel />
+                </div>
+              </>
             )}
           </div>
         </div>

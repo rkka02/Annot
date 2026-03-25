@@ -13,6 +13,7 @@ export function TreeExplorer() {
     treeLoading,
     selectedNode,
     selectNode,
+    clearSelection,
     refreshTree,
     explorerOpen,
     toggleExplorer,
@@ -175,7 +176,14 @@ export function TreeExplorer() {
       </div>
 
       {/* Tree */}
-      <nav className="flex-1 overflow-y-auto px-1 pb-4">
+      <nav
+        className="flex-1 overflow-y-auto px-1 pb-4"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            clearSelection();
+          }
+        }}
+      >
         {treeLoading ? (
           <div className="px-3 py-2 text-xs text-on-surface-variant">Loading workspace...</div>
         ) : treeRoot?.children?.length ? (

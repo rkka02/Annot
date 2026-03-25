@@ -28,6 +28,7 @@ export interface WorkspaceState {
 
 export interface WorkspaceActions {
   selectNode: (node: TreeNode) => void;
+  clearSelection: () => void;
   openPdf: (pdf: TreeNode) => void;
   openSession: (session: Pick<Session, 'id' | 'folderPath' | 'sessionKind' | 'pdfPath'>) => void;
   closePdf: () => void;
