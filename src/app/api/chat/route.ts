@@ -3,7 +3,7 @@ import { getValidToken } from '@/lib/oauth';
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, pdfContext } = await req.json();
+    const { messages, pdfContext, model } = await req.json();
 
     // Get OAuth token
     const accessToken = await getValidToken();
@@ -26,7 +26,7 @@ When referencing specific parts of the paper, be precise about locations.`;
         'Authorization': `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: model || 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
           ...messages.map((m: { role: string; content: string }) => ({
@@ -45,7 +45,7 @@ When referencing specific parts of the paper, be precise about locations.`;
     const data = await response.json();
     return NextResponse.json({
       content: data.choices[0].message.content,
-      model: 'gpt',
+      model: model || 'gpt-4o-mini',
     });
   } catch {
     return NextResponse.json(
