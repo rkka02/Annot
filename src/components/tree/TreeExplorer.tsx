@@ -1,6 +1,7 @@
 'use client';
 
 import { TreeItem } from './TreeItem';
+import { TreePromptDialog } from './TreePromptDialog';
 import { useWorkspace } from '@/lib/workspace-store';
 import { FolderPlus, FilePlus, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { countItems, findNode, getParentFolderPath } from '@/lib/tree-utils';
@@ -18,15 +19,13 @@ export function TreeExplorer() {
   } = useWorkspace();
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const targetFolderPath = getParentFolderPath(selectedNode);
   const stats = treeRoot ? countItems(treeRoot) : { folders: 0, pdfs: 0 };
 
-  const handleCreateFolder = async () => {
-    const name = window.prompt('New folder name');
-    if (!name?.trim()) return;
-
+  const handleCreateFolder = async (name: string) => {
     setIsCreatingFolder(true);
     try {
       const res = await fetch('/api/workspace/folders', {
@@ -49,6 +48,7 @@ export function TreeExplorer() {
           selectNode(nextNode);
         }
       }
+      setCreateDialogOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create folder';
       window.alert(message);
@@ -149,7 +149,7 @@ export function TreeExplorer() {
         </div>
         <div className="flex items-center gap-0.5">
           <button
-            onClick={() => void handleCreateFolder()}
+            onClick={() => setCreateDialogOpen(true)}
             disabled={isCreatingFolder || treeLoading}
             className="w-6 h-6 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors disabled:opacity-50"
             title="Create folder"
@@ -200,6 +200,21 @@ export function TreeExplorer() {
           {stats.folders} folders &middot; {stats.pdfs} PDFs
         </div>
       </div>
+
+      {createDialogOpen && (
+        <TreePromptDialog
+          open
+          title="Create Folder"
+          description={targetFolderPath
+            ? `This will create a folder inside ${targetFolderPath}.`
+            : 'This will create a folder in the workspace root.'}
+          placeholder="Folder name"
+          confirmLabel="Create"
+          busy={isCreatingFolder}
+          onCancel={() => setCreateDialogOpen(false)}
+          onConfirm={(value) => handleCreateFolder(value)}
+        />
+      )}
     </aside>
   );
 }

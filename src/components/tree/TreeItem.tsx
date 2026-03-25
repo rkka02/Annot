@@ -5,6 +5,7 @@ import { TreeNode } from '@/types';
 import { useWorkspace } from '@/lib/workspace-store';
 import { ChevronRight, Ellipsis, FileText, Folder, FolderInput, FolderOpen, Pencil, Trash2 } from 'lucide-react';
 import { findNode, getParentFolderPath } from '@/lib/tree-utils';
+import { TreePromptDialog } from './TreePromptDialog';
 
 interface TreeItemProps {
   node: TreeNode;
@@ -17,6 +18,8 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
   const [expanded, setExpanded] = useState(depth < 1); // auto-expand first level
   const [menuOpen, setMenuOpen] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const isSelected = selectedPath === node.path;
   const isFolder = node.type === 'folder';
@@ -56,19 +59,13 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
     }
   };
 
-  const handleRename = async () => {
-    const suggestedName = node.type === 'pdf'
-      ? node.name.replace(/\.pdf$/i, '')
-      : node.name;
-    const nextName = window.prompt('New name', suggestedName);
-    if (!nextName?.trim()) return;
-
+  const handleRename = async (nextName: string) => {
     setIsMutating(true);
     try {
       const endpoint = node.type === 'folder' ? '/api/workspace/folders' : '/api/papers';
       const payload = node.type === 'folder'
-        ? { path: node.path, name: nextName.trim() }
-        : { path: node.path, name: nextName.trim(), action: 'rename' };
+        ? { path: node.path, name: nextName }
+        : { path: node.path, name: nextName, action: 'rename' };
 
       const res = await fetch(endpoint, {
         method: 'PATCH',
@@ -82,6 +79,7 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
       }
 
       setMenuOpen(false);
+      setRenameDialogOpen(false);
       await focusNodeByPath(data.path);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Rename failed';
@@ -118,16 +116,8 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
     }
   };
 
-  const handleMovePdf = async () => {
+  const handleMovePdf = async (targetFolderPath: string) => {
     if (node.type !== 'pdf') return;
-
-    const currentFolderPath = getParentFolderPath(node);
-    const targetFolderPath = window.prompt(
-      'Move PDF to folder path relative to workspace root. Leave blank for root.',
-      currentFolderPath,
-    );
-    if (targetFolderPath === null) return;
-
     setIsMutating(true);
     try {
       const res = await fetch('/api/papers', {
@@ -135,7 +125,7 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           path: node.path,
-          targetFolderPath: targetFolderPath.trim(),
+          targetFolderPath,
           action: 'move',
         }),
       });
@@ -146,6 +136,7 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
       }
 
       setMenuOpen(false);
+      setMoveDialogOpen(false);
       await focusNodeByPath(data.path);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Move failed';
@@ -219,7 +210,10 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
             <div className="absolute right-0 top-7 z-20 min-w-36 rounded-lg border border-outline-variant/20 bg-surface-container-lowest py-1 shadow-ambient">
               {node.type === 'pdf' && (
                 <button
-                  onClick={() => void handleMovePdf()}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setMoveDialogOpen(true);
+                  }}
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-on-surface hover:bg-surface-container-high"
                 >
                   <FolderInput size={12} strokeWidth={2} />
@@ -227,7 +221,10 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
                 </button>
               )}
               <button
-                onClick={() => void handleRename()}
+                onClick={() => {
+                  setMenuOpen(false);
+                  setRenameDialogOpen(true);
+                }}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-on-surface hover:bg-surface-container-high"
               >
                 <Pencil size={12} strokeWidth={2} />
@@ -254,6 +251,37 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
           selectedPath={selectedPath}
         />
       ))}
+
+      {renameDialogOpen && (
+        <TreePromptDialog
+          open
+          title={node.type === 'pdf' ? 'Rename PDF' : 'Rename Folder'}
+          description={node.type === 'pdf'
+            ? 'Change the visible PDF file name.'
+            : 'Change the folder name.'}
+          initialValue={node.type === 'pdf' ? node.name.replace(/\.pdf$/i, '') : node.name}
+          placeholder={node.type === 'pdf' ? 'PDF name' : 'Folder name'}
+          confirmLabel="Rename"
+          busy={isMutating}
+          onCancel={() => setRenameDialogOpen(false)}
+          onConfirm={(value) => handleRename(value)}
+        />
+      )}
+
+      {node.type === 'pdf' && moveDialogOpen && (
+        <TreePromptDialog
+          open
+          title="Move PDF"
+          description="Enter a folder path relative to the workspace root. Leave it blank to move the PDF to the root."
+          initialValue={getParentFolderPath(node)}
+          placeholder="Target folder path"
+          confirmLabel="Move"
+          allowEmpty
+          busy={isMutating}
+          onCancel={() => setMoveDialogOpen(false)}
+          onConfirm={(value) => handleMovePdf(value)}
+        />
+      )}
     </div>
   );
 }

@@ -119,6 +119,14 @@ export async function createWorkspaceFolder(parentPath: string, folderName: stri
   const absoluteParent = parentPath ? resolveFolderPath(parentPath) : getWorkspaceRoot();
   const absolutePath = path.join(absoluteParent, safeName);
 
+  await fs.mkdir(absoluteParent, { recursive: true });
+
+  const parentStats = await fs.stat(absoluteParent);
+  if (!parentStats.isDirectory()) {
+    throw new Error('Target folder does not exist');
+  }
+
+  await ensurePathDoesNotExist(absolutePath, 'A folder with that name already exists');
   await fs.mkdir(absolutePath, { recursive: false });
 
   const relativePath = parentPath ? `${parentPath}/${safeName}` : safeName;
