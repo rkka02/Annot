@@ -48,3 +48,5 @@ next-env.d.ts
 # local planning and design artifacts
 project-plan.md
 stitch/
+AGENTS.md
+CLAUDE.md
