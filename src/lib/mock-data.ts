@@ -1,120 +1,125 @@
-import { Paper, Session, Project, ChatMessage } from '@/types';
+import { TreeNode, Session, ChatMessage } from '@/types';
 
-export const mockPapers: Paper[] = [
-  {
-    id: '1',
-    title: 'Attention is All You Need: Scaling Transformative AI',
-    authors: 'Vaswani et al., 2017',
-    fileName: 'attention-is-all-you-need.pdf',
-    uploadedAt: '2024-05-12',
-    status: 'peer-reviewed',
-    tags: ['NLP', 'Transformers'],
-  },
-  {
-    id: '2',
-    title: 'CRISPR/Cas9 Mediated Gene Editing in Higher Fungi',
-    authors: 'Dr. Eleanor Vance',
-    fileName: 'crispr-fungi.pdf',
-    uploadedAt: '2024-06-05',
-    status: 'pre-print',
-    tags: ['Biology', 'Genetics'],
-  },
-  {
-    id: '3',
-    title: 'Dark Matter Constraints from Galaxy Clustering',
-    authors: 'Smith & Rodriguez',
-    fileName: 'dark-matter-constraints.pdf',
-    uploadedAt: '2024-08-18',
-    status: 'peer-reviewed',
-    tags: ['Physics', 'Astrophysics'],
-  },
-];
+// ── Mock Tree Structure ─────────────────────────────────────────
 
-export const mockSessions: Session[] = [
-  {
-    id: 's1',
-    paperId: '1',
-    paperTitle: 'Synthesizing Neural Radiance Fields for Urban Planning',
-    fileName: 'nerf-urban-net-2013.pdf',
-    summary: 'Discussed the computational overhead of instant NGP vs. traditional NeRF models. Explored the implications for real-time architectural visualization and city-scale rendering latency...',
-    tags: ['ARCHITECTURE', 'ML SYSTEMS'],
-    createdAt: '2026-03-25T10:30:00Z',
-    updatedAt: '2026-03-25T14:20:00Z',
-    messages: [],
-  },
-  {
-    id: 's2',
-    paperId: '2',
-    paperTitle: 'Post-Structural Analysis of Early Renaissance Textualities',
-    fileName: 'archive-renaissance-v4.pdf',
-    summary: 'Investigated into the transition from manuscript to print culture. AI provided a summary of chapter 4 regarding the socio-economic status of scribes in Florence...',
-    tags: ['HISTORY', 'LITERATURE'],
-    createdAt: '2026-03-25T08:00:00Z',
-    updatedAt: '2026-03-25T11:45:00Z',
-    messages: [],
-  },
-  {
-    id: 's3',
-    paperId: '3',
-    paperTitle: 'Ethics of Large Language Models',
-    fileName: 'llm-ethics.pdf',
-    summary: 'Focused on bias mitigation strategies outlined in the 2025 Meta whitepaper. Discussed RLHF and Constitutional AI approaches...',
-    tags: ['AI', 'ETHICS'],
-    createdAt: '2026-03-24T09:00:00Z',
-    updatedAt: '2026-03-24T12:00:00Z',
-    messages: [],
-  },
-  {
-    id: 's4',
-    paperId: '1',
-    paperTitle: 'Global Supply Chain Fragility',
-    fileName: 'supply-chain.pdf',
-    summary: 'Analysis of Just-in-Time manufacturing risks during maritime disruptions. Summary of economic projections from World Bank report...',
-    tags: ['ECONOMICS'],
-    createdAt: '2026-03-24T15:00:00Z',
-    updatedAt: '2026-03-24T17:30:00Z',
-    messages: [],
-  },
-];
+export const mockTree: TreeNode = {
+  id: 'root',
+  name: 'My Research',
+  type: 'folder',
+  path: '',
+  children: [
+    {
+      id: 'f-ml',
+      name: 'Machine Learning',
+      type: 'folder',
+      path: 'Machine Learning',
+      children: [
+        {
+          id: 'p-survey',
+          name: 'survey-2024.pdf',
+          type: 'pdf',
+          path: 'Machine Learning/survey-2024.pdf',
+        },
+        {
+          id: 'f-transformers',
+          name: 'Transformers',
+          type: 'folder',
+          path: 'Machine Learning/Transformers',
+          children: [
+            {
+              id: 'p-attention',
+              name: 'attention-is-all-you-need.pdf',
+              type: 'pdf',
+              path: 'Machine Learning/Transformers/attention-is-all-you-need.pdf',
+            },
+            {
+              id: 'p-bert',
+              name: 'bert-pretraining.pdf',
+              type: 'pdf',
+              path: 'Machine Learning/Transformers/bert-pretraining.pdf',
+            },
+          ],
+        },
+        {
+          id: 'f-rl',
+          name: 'Reinforcement Learning',
+          type: 'folder',
+          path: 'Machine Learning/Reinforcement Learning',
+          children: [
+            {
+              id: 'p-ppo',
+              name: 'ppo-algorithms.pdf',
+              type: 'pdf',
+              path: 'Machine Learning/Reinforcement Learning/ppo-algorithms.pdf',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'f-physics',
+      name: 'Physics',
+      type: 'folder',
+      path: 'Physics',
+      children: [
+        {
+          id: 'p-quantum',
+          name: 'quantum-entanglement.pdf',
+          type: 'pdf',
+          path: 'Physics/quantum-entanglement.pdf',
+        },
+        {
+          id: 'f-astro',
+          name: 'Astrophysics',
+          type: 'folder',
+          path: 'Physics/Astrophysics',
+          children: [
+            {
+              id: 'p-darkmatter',
+              name: 'dark-matter-constraints.pdf',
+              type: 'pdf',
+              path: 'Physics/Astrophysics/dark-matter-constraints.pdf',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'f-neuro',
+      name: 'Neuroscience',
+      type: 'folder',
+      path: 'Neuroscience',
+      children: [],
+    },
+  ],
+};
 
-export const mockRecentSessions = [
-  {
-    id: 'rs1',
-    title: 'Neural Architectures for LLMs',
-    summary: 'Continuing analysis on transformer efficiency and attention mechanisms...',
-    status: 'active' as const,
-    timeAgo: '14 mins ago',
-  },
-  {
-    id: 'rs2',
-    title: 'Quantum Computing Ethics',
-    summary: 'Troubling moral paper perspective on cryptographic risks...',
-    status: 'archive' as const,
-    timeAgo: 'Yesterday',
-  },
-  {
-    id: 'rs3',
-    title: 'Sustainable Architecture 2024',
-    summary: 'Comparing thermal efficiency of modular timber structures...',
-    status: 'archive' as const,
-    timeAgo: 'Oct 15',
-  },
-];
+// ── Mock Sessions ───────────────────────────────────────────────
 
-export const mockProjects: Project[] = [
-  {
-    id: 'p1',
-    name: 'Quantum Gravity',
-    sessionCount: 12,
-    documentCount: 4,
-  },
-  {
-    id: 'p2',
-    name: 'Medieval Art',
-    sessionCount: 8,
-    documentCount: 3,
-  },
-];
+export const mockSessions: Record<string, Session[]> = {
+  'Machine Learning': [
+    {
+      id: 's1',
+      folderPath: 'Machine Learning',
+      title: 'ML landscape overview',
+      createdAt: '2026-03-25T10:30:00Z',
+      updatedAt: '2026-03-25T14:20:00Z',
+      messages: [],
+    },
+  ],
+  'Machine Learning/Transformers': [
+    {
+      id: 's2',
+      folderPath: 'Machine Learning/Transformers',
+      title: 'Attention mechanism deep-dive',
+      createdAt: '2026-03-24T09:00:00Z',
+      updatedAt: '2026-03-24T12:00:00Z',
+      messages: [],
+    },
+  ],
+};
+
+// ── Mock Chat Messages (for active session preview) ─────────────
 
 export const mockChatMessages: ChatMessage[] = [
   {
@@ -130,6 +135,28 @@ export const mockChatMessages: ChatMessage[] = [
 
 According to the paper, this specific ratio is designed to minimize cognitive load by reducing the physical distance your eyes travel between reading and chatting. It aims to create a "focus state" where the auxiliary tool doesn't distract from the core research.`,
     timestamp: '2026-03-25T10:42:30Z',
-    model: 'gpt',
+    model: 'gpt-4o',
   },
 ];
+
+// ── Helpers ─────────────────────────────────────────────────────
+
+/** Collect all PDFs reachable from a folder (self + descendants). */
+export function collectPdfs(node: TreeNode): TreeNode[] {
+  if (node.type === 'pdf') return [node];
+  const pdfs: TreeNode[] = [];
+  for (const child of node.children ?? []) {
+    pdfs.push(...collectPdfs(child));
+  }
+  return pdfs;
+}
+
+/** Find a node by its path in the tree. */
+export function findNode(root: TreeNode, targetPath: string): TreeNode | null {
+  if (root.path === targetPath) return root;
+  for (const child of root.children ?? []) {
+    const found = findNode(child, targetPath);
+    if (found) return found;
+  }
+  return null;
+}

@@ -1,27 +1,19 @@
 import { NextResponse } from 'next/server';
-import { loadTokens, clearTokens } from '@/lib/oauth';
+import { getCodexAuthStatus } from '@/lib/codex-auth';
 
 // GET /api/auth/status — Check if authenticated
 export async function GET() {
-  const tokens = await loadTokens();
-
-  if (!tokens) {
-    return NextResponse.json({ authenticated: false });
-  }
-
-  const isExpired = tokens.expiresAt ? Date.now() > tokens.expiresAt : false;
-  const hasRefresh = !!tokens.refreshToken;
-
-  return NextResponse.json({
-    authenticated: true,
-    hasRefreshToken: hasRefresh,
-    isExpired,
-    expiresAt: tokens.expiresAt,
-  });
+  const status = await getCodexAuthStatus();
+  return NextResponse.json(status);
 }
 
-// DELETE /api/auth/status — Disconnect (remove stored tokens)
+// DELETE /api/auth/status — Managed by Codex, so Annot does not clear it.
 export async function DELETE() {
-  await clearTokens();
-  return NextResponse.json({ success: true });
+  return NextResponse.json(
+    {
+      success: false,
+      error: 'Annot uses the existing Codex login on this machine. Sign out from Codex if you want to disconnect it here.',
+    },
+    { status: 400 }
+  );
 }

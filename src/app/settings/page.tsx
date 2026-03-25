@@ -1,81 +1,59 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { LogIn, LogOut, Server, Palette, ExternalLink, Loader2, CheckCircle2 } from 'lucide-react';
+import { LogIn, Server, Palette, Loader2, CheckCircle2, RefreshCw, ArrowLeft } from 'lucide-react';
+import Link from 'next/link';
 
 interface AuthStatus {
   authenticated: boolean;
   hasRefreshToken?: boolean;
   isExpired?: boolean;
   expiresAt?: number;
+  planType?: string;
+  email?: string;
 }
 
 export default function SettingsPage() {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
-    checkAuth();
+    void checkAuth();
   }, []);
 
   const checkAuth = async () => {
+    setIsRefreshing(true);
     try {
       const res = await fetch('/api/auth/status');
       const data = await res.json();
       setAuthStatus(data);
     } catch {
       setAuthStatus({ authenticated: false });
+    } finally {
+      setIsRefreshing(false);
     }
-  };
-
-  const handleConnect = async () => {
-    setIsConnecting(true);
-    try {
-      const res = await fetch('/api/auth');
-      const data = await res.json();
-
-      // Open OAuth URL in new tab
-      window.open(data.authUrl, '_blank');
-
-      // Poll for auth status
-      const pollInterval = setInterval(async () => {
-        const statusRes = await fetch('/api/auth/status');
-        const status = await statusRes.json();
-        if (status.authenticated) {
-          clearInterval(pollInterval);
-          setAuthStatus(status);
-          setIsConnecting(false);
-        }
-      }, 2000);
-
-      // Stop polling after 2 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        setIsConnecting(false);
-      }, 120_000);
-    } catch {
-      setIsConnecting(false);
-    }
-  };
-
-  const handleDisconnect = async () => {
-    await fetch('/api/auth/status', { method: 'DELETE' });
-    setAuthStatus({ authenticated: false });
   };
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-2xl mx-auto px-8 py-8">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-on-surface-variant hover:text-on-surface transition-colors mb-6"
+        >
+          <ArrowLeft size={13} strokeWidth={2} />
+          Back to workspace
+        </Link>
         <h1 className="text-3xl font-bold text-on-surface tracking-tight mb-2">Settings</h1>
         <p className="font-editorial text-on-surface-variant italic text-lg mb-10">
           Configure your research environment.
         </p>
 
-        {/* OpenAI Connection */}
+        {/* Codex Connection */}
         <section className="mb-10">
           <div className="flex items-center gap-2 mb-5">
             <LogIn size={16} strokeWidth={2} className="text-on-surface-variant" />
-            <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">OpenAI Connection</h2>
+            <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">Codex Connection</h2>
           </div>
 
           <div className="bg-surface-container-lowest rounded-lg p-5">
@@ -89,18 +67,21 @@ export default function SettingsPage() {
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 size={18} className="text-emerald-600" />
-                    <span className="text-sm font-semibold text-on-surface">Connected to OpenAI</span>
+                    <span className="text-sm font-semibold text-on-surface">Connected via Codex</span>
                   </div>
                   <button
-                    onClick={handleDisconnect}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium text-error hover:bg-error-container/20 transition-colors"
+                    onClick={() => void checkAuth()}
+                    disabled={isRefreshing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium text-on-surface-variant hover:bg-surface-container transition-colors disabled:opacity-50"
                   >
-                    <LogOut size={12} strokeWidth={2} />
-                    Disconnect
+                    <RefreshCw size={12} strokeWidth={2} className={isRefreshing ? 'animate-spin' : ''} />
+                    Refresh
                   </button>
                 </div>
                 <p className="text-xs text-on-surface-variant">
-                  Authenticated via OAuth. Your ChatGPT subscription is used for API calls.
+                  Annot is using the local Codex login from this machine.
+                  {authStatus.planType && <> Plan: {authStatus.planType}.</>}
+                  {authStatus.email && <> Signed in as {authStatus.email}.</>}
                   {authStatus.expiresAt && (
                     <> Token expires {new Date(authStatus.expiresAt).toLocaleDateString()}.
                     {authStatus.hasRefreshToken && ' Auto-refresh enabled.'}</>
@@ -110,31 +91,29 @@ export default function SettingsPage() {
             ) : (
               <div>
                 <p className="text-sm text-on-surface-variant mb-4">
-                  Connect your OpenAI account to use GPT-4o as your research assistant.
-                  Signs in via browser — no API key needed.
+                  Browser OAuth is disabled here. Annot now reuses the existing Codex login on this machine.
+                  Sign in to Codex first, then refresh this status.
                 </p>
                 <button
-                  onClick={handleConnect}
-                  disabled={isConnecting}
+                  onClick={() => void checkAuth()}
+                  disabled={isRefreshing}
                   className="btn-gradient text-on-primary px-5 py-2.5 rounded-sm text-sm font-semibold flex items-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
-                  {isConnecting ? (
+                  {isRefreshing ? (
                     <>
                       <Loader2 size={15} className="animate-spin" />
-                      Waiting for login...
+                      Checking Codex login...
                     </>
                   ) : (
                     <>
-                      <ExternalLink size={15} strokeWidth={2} />
-                      Sign in with OpenAI
+                      <RefreshCw size={15} strokeWidth={2} />
+                      Refresh Codex Status
                     </>
                   )}
                 </button>
-                {isConnecting && (
-                  <p className="text-xs text-on-surface-variant mt-3">
-                    A browser window should have opened. Complete the login there, then this page will update automatically.
-                  </p>
-                )}
+                <p className="text-xs text-on-surface-variant mt-3">
+                  If Codex is already signed in, this page should flip to connected immediately.
+                </p>
               </div>
             )}
           </div>

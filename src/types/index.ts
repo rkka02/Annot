@@ -1,21 +1,21 @@
-export interface Paper {
+// ── Tree Structure ──────────────────────────────────────────────
+
+export type TreeNodeType = 'folder' | 'pdf';
+
+export interface TreeNode {
   id: string;
-  title: string;
-  authors: string;
-  fileName: string;
-  uploadedAt: string;
-  thumbnail?: string;
-  tags?: string[];
-  status?: 'peer-reviewed' | 'pre-print' | 'draft';
+  name: string;
+  type: TreeNodeType;
+  path: string;            // filesystem path relative to root
+  children?: TreeNode[];   // only for folders
 }
+
+// ── Sessions ────────────────────────────────────────────────────
 
 export interface Session {
   id: string;
-  paperId: string;
-  paperTitle: string;
-  fileName: string;
-  summary: string;
-  tags: string[];
+  folderPath: string;      // which folder this session belongs to
+  title: string;
   createdAt: string;
   updatedAt: string;
   messages: ChatMessage[];
@@ -26,12 +26,14 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
-  model?: 'gpt';
+  model?: string;
 }
+
+// ── Highlights ──────────────────────────────────────────────────
 
 export interface Highlight {
   id: string;
-  paperId: string;
+  pdfPath: string;
   page: number;
   type: 'important' | 'unknown';
   text: string;
@@ -41,13 +43,4 @@ export interface Highlight {
     width: number;
     height: number;
   };
-}
-
-export interface Project {
-  id: string;
-  name: string;
-  description?: string;
-  sessionCount: number;
-  documentCount: number;
-  icon?: string;
 }
