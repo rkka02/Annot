@@ -144,7 +144,7 @@ function createCodexArgs(input: RunTurnInput): string[] {
   const baseArgs = ['exec'];
 
   if (input.codexSessionId) {
-    baseArgs.push('resume', '--json', input.codexSessionId);
+    baseArgs.push('resume', '--json', '--skip-git-repo-check', input.codexSessionId);
   } else {
     baseArgs.push(
       '--json',
