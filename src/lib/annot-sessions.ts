@@ -22,6 +22,11 @@ interface CreateSessionOptions {
   pdfPath?: string | null;
 }
 
+interface SessionPathRewrite {
+  from: string;
+  to: string;
+}
+
 interface ReconciledSessionResult {
   changed: boolean;
   session: StoredSession | null;
@@ -50,6 +55,12 @@ async function pathExists(relativePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function readSessionsFile(folderPath: string): Promise<StoredSession[]> {
+  const sessionsFile = await ensureSessionsFile(folderPath);
+  const raw = await fs.readFile(sessionsFile, 'utf8');
+  return JSON.parse(raw) as StoredSession[];
 }
 
 export function getWorkspaceRoot(): string {
@@ -227,6 +238,50 @@ async function writeSessions(folderPath: string, sessions: StoredSession[]): Pro
   await fs.writeFile(sessionsFile, JSON.stringify(sessions, null, 2));
 }
 
+function rewriteRelativePathPrefix(targetPath: string | undefined, rewrite: SessionPathRewrite): string | undefined {
+  if (!targetPath) return targetPath;
+  if (targetPath === rewrite.from) return rewrite.to;
+  if (!targetPath.startsWith(`${rewrite.from}/`)) return targetPath;
+  return `${rewrite.to}${targetPath.slice(rewrite.from.length)}`;
+}
+
+function rewriteSessionPaths(session: StoredSession, rewrite: SessionPathRewrite): StoredSession {
+  return {
+    ...session,
+    folderPath: rewriteRelativePathPrefix(session.folderPath, rewrite) ?? session.folderPath,
+    pdfPath: rewriteRelativePathPrefix(session.pdfPath, rewrite),
+  };
+}
+
+async function collectAnnotSessionFolders(rootFolderPath: string): Promise<string[]> {
+  const absoluteRoot = resolveFolderPath(rootFolderPath);
+  const folders: string[] = [];
+
+  async function walk(currentRelativePath: string): Promise<void> {
+    const absoluteCurrentPath = currentRelativePath ? resolveFolderPath(currentRelativePath) : absoluteRoot;
+    const annotDir = path.join(absoluteCurrentPath, '.annot');
+
+    try {
+      const stat = await fs.stat(path.join(annotDir, 'sessions.json'));
+      if (stat.isFile()) {
+        folders.push(currentRelativePath);
+      }
+    } catch {
+      // Ignore missing .annot directories.
+    }
+
+    const entries = await fs.readdir(absoluteCurrentPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const childRelativePath = currentRelativePath ? `${currentRelativePath}/${entry.name}` : entry.name;
+      await walk(childRelativePath);
+    }
+  }
+
+  await walk(rootFolderPath);
+  return folders;
+}
+
 export async function getSession(folderPath: string, sessionId: string): Promise<StoredSession | null> {
   const sessions = await listSessions(folderPath);
   return sessions.find((session) => session.id === sessionId) || null;
@@ -305,4 +360,70 @@ export function buildSessionTitle(
 
 export function appendMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
   return [...messages, message];
+}
+
+export async function removePdfSessions(folderPath: string, pdfPath: string): Promise<void> {
+  const normalizedFolderPath = sanitizeRelativePath(folderPath);
+  const normalizedPdfPath = normalizePdfPath(pdfPath);
+  const sessions = await readSessionsFile(normalizedFolderPath);
+  const nextSessions = sessions.filter((session) => (
+    !(session.sessionKind === 'pdf' && session.pdfPath === normalizedPdfPath)
+  ));
+
+  if (nextSessions.length !== sessions.length) {
+    await writeSessions(normalizedFolderPath, nextSessions);
+  }
+}
+
+export async function movePdfSessions(
+  fromFolderPath: string,
+  toFolderPath: string,
+  oldPdfPath: string,
+  newPdfPath: string,
+): Promise<void> {
+  const normalizedFromFolderPath = sanitizeRelativePath(fromFolderPath);
+  const normalizedToFolderPath = sanitizeRelativePath(toFolderPath);
+  const normalizedOldPdfPath = normalizePdfPath(oldPdfPath);
+  const normalizedNewPdfPath = normalizePdfPath(newPdfPath);
+
+  const sourceSessions = await readSessionsFile(normalizedFromFolderPath);
+  const movedSessions = sourceSessions
+    .filter((session) => session.sessionKind === 'pdf' && session.pdfPath === normalizedOldPdfPath)
+    .map((session) => ({
+      ...session,
+      folderPath: normalizedToFolderPath,
+      pdfPath: normalizedNewPdfPath,
+      title: buildSessionTitle(normalizedToFolderPath, 'pdf', normalizedNewPdfPath),
+      updatedAt: new Date().toISOString(),
+    }));
+
+  if (movedSessions.length === 0) {
+    return;
+  }
+
+  const remainingSourceSessions = sourceSessions.filter((session) => (
+    !(session.sessionKind === 'pdf' && session.pdfPath === normalizedOldPdfPath)
+  ));
+  await writeSessions(normalizedFromFolderPath, remainingSourceSessions);
+
+  const destinationSessions = await readSessionsFile(normalizedToFolderPath);
+  await writeSessions(normalizedToFolderPath, [...destinationSessions, ...movedSessions]);
+}
+
+export async function rewriteSessionsForFolderMove(
+  oldFolderPath: string,
+  newFolderPath: string,
+): Promise<void> {
+  const normalizedOldFolderPath = sanitizeRelativePath(oldFolderPath);
+  const normalizedNewFolderPath = sanitizeRelativePath(newFolderPath);
+  const sessionFolders = await collectAnnotSessionFolders(normalizedNewFolderPath);
+
+  await Promise.all(sessionFolders.map(async (sessionFolderPath) => {
+    const rawSessions = await readSessionsFile(sessionFolderPath);
+    const nextSessions = rawSessions.map((session) => rewriteSessionPaths(session, {
+      from: normalizedOldFolderPath,
+      to: normalizedNewFolderPath,
+    }));
+    await writeSessions(sessionFolderPath, nextSessions);
+  }));
 }

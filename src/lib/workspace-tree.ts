@@ -1,7 +1,13 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 
-import { getWorkspaceRoot, resolveFolderPath } from '@/lib/annot-sessions';
+import {
+  getWorkspaceRoot,
+  movePdfSessions,
+  removePdfSessions,
+  resolveFolderPath,
+  rewriteSessionsForFolderMove,
+} from '@/lib/annot-sessions';
 import { TreeNode } from '@/types';
 
 function isVisibleEntry(name: string): boolean {
@@ -45,6 +51,25 @@ async function ensureUniqueFilePath(dirPath: string, fileName: string): Promise<
       attempt += 1;
     } catch {
       return candidatePath;
+    }
+  }
+}
+
+async function ensureDirectory(relativePath: string): Promise<void> {
+  const absolutePath = relativePath ? resolveFolderPath(relativePath) : getWorkspaceRoot();
+  const stats = await fs.stat(absolutePath);
+  if (!stats.isDirectory()) {
+    throw new Error('Target folder does not exist');
+  }
+}
+
+async function ensurePathDoesNotExist(absolutePath: string, errorMessage: string): Promise<void> {
+  try {
+    await fs.access(absolutePath);
+    throw new Error(errorMessage);
+  } catch (error) {
+    if (error instanceof Error && error.message === errorMessage) {
+      throw error;
     }
   }
 }
@@ -126,5 +151,126 @@ export async function saveUploadedPdf(folderPath: string, file: File): Promise<T
     name: storedName,
     type: 'pdf',
     path: relativePath,
+  };
+}
+
+export async function renameWorkspaceFolder(folderPath: string, nextName: string): Promise<TreeNode> {
+  await ensureWorkspaceRoot();
+
+  const normalizedFolderPath = folderPath.trim();
+  if (!normalizedFolderPath) {
+    throw new Error('Root folder cannot be renamed');
+  }
+
+  const safeName = sanitizeSegment(nextName, 'folder');
+  const parentPath = path.posix.dirname(normalizedFolderPath) === '.'
+    ? ''
+    : path.posix.dirname(normalizedFolderPath);
+  const nextRelativePath = parentPath ? `${parentPath}/${safeName}` : safeName;
+  const sourceAbsolutePath = resolveFolderPath(normalizedFolderPath);
+  const targetAbsolutePath = resolveFolderPath(nextRelativePath);
+
+  await ensurePathDoesNotExist(targetAbsolutePath, 'A folder with that name already exists');
+  await fs.rename(sourceAbsolutePath, targetAbsolutePath);
+  await rewriteSessionsForFolderMove(normalizedFolderPath, nextRelativePath);
+
+  return {
+    id: `folder:${nextRelativePath}`,
+    name: safeName,
+    type: 'folder',
+    path: nextRelativePath,
+    children: [],
+  };
+}
+
+export async function deleteWorkspaceFolder(folderPath: string): Promise<void> {
+  await ensureWorkspaceRoot();
+
+  const normalizedFolderPath = folderPath.trim();
+  if (!normalizedFolderPath) {
+    throw new Error('Root folder cannot be deleted');
+  }
+
+  await fs.rm(resolveFolderPath(normalizedFolderPath), { recursive: true, force: false });
+}
+
+export async function renameWorkspacePdf(pdfPath: string, nextName: string): Promise<TreeNode> {
+  await ensureWorkspaceRoot();
+
+  const normalizedPdfPath = pdfPath.trim();
+  const safeName = sanitizeSegment(nextName, 'file');
+  const fileName = safeName.toLowerCase().endsWith('.pdf') ? safeName : `${safeName}.pdf`;
+  const parentPath = path.posix.dirname(normalizedPdfPath) === '.'
+    ? ''
+    : path.posix.dirname(normalizedPdfPath);
+  const nextRelativePath = parentPath ? `${parentPath}/${fileName}` : fileName;
+  const sourceAbsolutePath = resolveFolderPath(normalizedPdfPath);
+  const targetAbsolutePath = resolveFolderPath(nextRelativePath);
+
+  await ensurePathDoesNotExist(targetAbsolutePath, 'A PDF with that name already exists');
+  await fs.rename(sourceAbsolutePath, targetAbsolutePath);
+
+  if (parentPath) {
+    await movePdfSessions(parentPath, parentPath, normalizedPdfPath, nextRelativePath);
+  } else {
+    await movePdfSessions('', '', normalizedPdfPath, nextRelativePath);
+  }
+
+  return {
+    id: `pdf:${nextRelativePath}`,
+    name: fileName,
+    type: 'pdf',
+    path: nextRelativePath,
+  };
+}
+
+export async function deleteWorkspacePdf(pdfPath: string): Promise<void> {
+  await ensureWorkspaceRoot();
+
+  const normalizedPdfPath = pdfPath.trim();
+  const parentPath = path.posix.dirname(normalizedPdfPath) === '.'
+    ? ''
+    : path.posix.dirname(normalizedPdfPath);
+
+  await fs.rm(resolveFolderPath(normalizedPdfPath), { force: false });
+  await removePdfSessions(parentPath, normalizedPdfPath);
+}
+
+export async function moveWorkspacePdf(pdfPath: string, targetFolderPath: string): Promise<TreeNode> {
+  await ensureWorkspaceRoot();
+
+  const normalizedPdfPath = pdfPath.trim();
+  const normalizedTargetFolderPath = targetFolderPath.trim();
+  await ensureDirectory(normalizedTargetFolderPath);
+
+  const fileName = path.posix.basename(normalizedPdfPath);
+  const nextRelativePath = normalizedTargetFolderPath
+    ? `${normalizedTargetFolderPath}/${fileName}`
+    : fileName;
+  const sourceAbsolutePath = resolveFolderPath(normalizedPdfPath);
+  const targetAbsolutePath = resolveFolderPath(nextRelativePath);
+
+  if (normalizedPdfPath === nextRelativePath) {
+    return {
+      id: `pdf:${nextRelativePath}`,
+      name: fileName,
+      type: 'pdf',
+      path: nextRelativePath,
+    };
+  }
+
+  await ensurePathDoesNotExist(targetAbsolutePath, 'A PDF with that name already exists in the target folder');
+  await fs.rename(sourceAbsolutePath, targetAbsolutePath);
+
+  const sourceFolderPath = path.posix.dirname(normalizedPdfPath) === '.'
+    ? ''
+    : path.posix.dirname(normalizedPdfPath);
+  await movePdfSessions(sourceFolderPath, normalizedTargetFolderPath, normalizedPdfPath, nextRelativePath);
+
+  return {
+    id: `pdf:${nextRelativePath}`,
+    name: fileName,
+    type: 'pdf',
+    path: nextRelativePath,
   };
 }

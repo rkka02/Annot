@@ -109,6 +109,15 @@ export default function AppPage() {
       const nextActivePdf = current.activePdf
         ? findNode(nextTree, current.activePdf.path)
         : null;
+      const nextActiveSessionFolder = current.activeSessionFolder
+        ? findNode(nextTree, current.activeSessionFolder)
+        : null;
+      const isCurrentPdfSessionInvalid = current.activeSessionKind === 'pdf' && (
+        !current.activeSessionPdfPath ||
+        !findNode(nextTree, current.activeSessionPdfPath)
+      );
+      const isCurrentFolderSessionInvalid = current.activeSessionKind === 'folder' && !nextActiveSessionFolder;
+      const shouldClearSession = isCurrentPdfSessionInvalid || isCurrentFolderSessionInvalid;
 
       return {
         ...current,
@@ -116,9 +125,15 @@ export default function AppPage() {
         treeLoading: false,
         selectedNode: nextSelectedNode,
         activePdf: nextActivePdf?.type === 'pdf' ? nextActivePdf : null,
+        activeSessionFolder: nextActiveSessionFolder?.type === 'folder'
+          ? nextActiveSessionFolder.path
+          : (shouldClearSession ? null : current.activeSessionFolder),
+        activeSessionKind: shouldClearSession ? null : current.activeSessionKind,
         activeSessionPdfPath: nextActivePdf?.type === 'pdf'
           ? nextActivePdf.path
-          : current.activeSessionPdfPath,
+          : (shouldClearSession ? null : current.activeSessionPdfPath),
+        activeSessionId: shouldClearSession ? null : current.activeSessionId,
+        chatOpen: shouldClearSession ? false : current.chatOpen,
       };
     });
 

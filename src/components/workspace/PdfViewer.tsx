@@ -23,6 +23,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 const HIGHLIGHTS_STORAGE_KEY = 'annot-pdf-highlights';
 
 type HighlightMode = Highlight['type'] | null;
+type PdfViewMode = 'paged' | 'scroll';
 type NormalizedHighlightRect = {
   x: number;
   y: number;
@@ -55,6 +56,7 @@ export function PdfViewer() {
   const [zoom, setZoom] = useState(125);
   const [pageNumber, setPageNumber] = useState(1);
   const [numPages, setNumPages] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<PdfViewMode>('scroll');
   const [containerWidth, setContainerWidth] = useState(720);
   const [highlightMode, setHighlightMode] = useState<HighlightMode>(null);
   const [eraseMode, setEraseMode] = useState(false);
@@ -65,7 +67,7 @@ export function PdfViewer() {
   });
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const pageShellRef = useRef<HTMLDivElement>(null);
+  const pageShellRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const fileUrl = useMemo(
     () => `/api/workspace/file?path=${encodeURIComponent(activePdfPath)}`,
@@ -97,6 +99,41 @@ export function PdfViewer() {
     return () => window.clearTimeout(timeout);
   }, [selectionNotice]);
 
+  useEffect(() => {
+    if (viewMode !== 'scroll' || !numPages) return;
+
+    const root = containerRef.current;
+    if (!root) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visibleEntries = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+
+        const mostVisibleEntry = visibleEntries[0];
+        if (!mostVisibleEntry) return;
+
+        const nextPage = Number((mostVisibleEntry.target as HTMLDivElement).dataset.pageNumber);
+        if (!Number.isNaN(nextPage)) {
+          setPageNumber(nextPage);
+        }
+      },
+      {
+        root,
+        threshold: [0.25, 0.5, 0.75],
+      },
+    );
+
+    Object.values(pageShellRefs.current).forEach((pageShell) => {
+      if (pageShell) {
+        observer.observe(pageShell);
+      }
+    });
+
+    return () => observer.disconnect();
+  }, [viewMode, numPages, pageWidth, activePdfPath]);
+
   const handleDocumentLoadSuccess = ({ numPages: nextNumPages }: { numPages: number }) => {
     setNumPages(nextNumPages);
     setPageNumber((current) => Math.min(current, nextNumPages));
@@ -104,10 +141,26 @@ export function PdfViewer() {
 
   const canGoPrev = pageNumber > 1;
   const canGoNext = numPages !== null && pageNumber < numPages;
-  const currentPageHighlights = highlights.filter((highlight) => highlight.page === pageNumber);
-
+  const highlightsByPage = useMemo(() => {
+    return highlights.reduce<Record<number, Highlight[]>>((accumulator, highlight) => {
+      accumulator[highlight.page] ??= [];
+      accumulator[highlight.page].push(highlight);
+      return accumulator;
+    }, {});
+  }, [highlights]);
   const handlePageChange = (nextPage: number) => {
     setSelectionNotice(null);
+
+    if (viewMode === 'scroll') {
+      const pageShell = pageShellRefs.current[nextPage];
+      if (pageShell) {
+        pageShell.scrollIntoView({
+          block: 'start',
+          behavior: 'smooth',
+        });
+      }
+    }
+
     setPageNumber(nextPage);
   };
 
@@ -120,9 +173,8 @@ export function PdfViewer() {
     saveHighlights(highlightStore);
   };
 
-  const getSelectionRects = (): NormalizedHighlightRect[] => {
+  const getSelectionRects = (pageShell: HTMLDivElement | null): NormalizedHighlightRect[] => {
     const selection = window.getSelection();
-    const pageShell = pageShellRef.current;
 
     if (!selection || !pageShell || selection.rangeCount === 0) {
       return [];
@@ -151,12 +203,12 @@ export function PdfViewer() {
       .filter((rect): rect is NormalizedHighlightRect => rect !== null);
   };
 
-  const handleHighlightSelection = () => {
+  const handleHighlightSelection = (targetPage: number, pageShell: HTMLDivElement | null) => {
     if (!highlightMode || eraseMode || !activePdfPath) return;
 
     const selection = window.getSelection();
     const selectedText = selection?.toString().trim() ?? '';
-    const rects = getSelectionRects();
+    const rects = getSelectionRects(pageShell);
 
     if (!selection || !selectedText || rects.length === 0) {
       setSelectionNotice('This PDF page has no selectable text in the current selection.');
@@ -171,7 +223,7 @@ export function PdfViewer() {
     const nextHighlight: Highlight = {
       id: crypto.randomUUID(),
       pdfPath: activePdfPath,
-      page: pageNumber,
+      page: targetPage,
       type: highlightMode,
       text: selectedText,
       rects,
@@ -198,11 +250,12 @@ export function PdfViewer() {
     );
   };
 
-  const handleEraseSelection = () => {
+  const handleEraseSelection = (targetPage: number, pageShell: HTMLDivElement | null) => {
     if (!eraseMode) return;
 
     const selection = window.getSelection();
-    const rects = getSelectionRects();
+    const rects = getSelectionRects(pageShell);
+    const pageHighlights = highlightsByPage[targetPage] ?? [];
 
     if (!selection || rects.length === 0) {
       setSelectionNotice('지울 하이라이트가 걸치도록 텍스트를 선택해 주세요.');
@@ -210,7 +263,7 @@ export function PdfViewer() {
     }
 
     const removableIds = new Set(
-      currentPageHighlights
+      pageHighlights
         .filter((highlight) => {
           const highlightRects = highlight.rects?.length ? highlight.rects : [highlight.position];
           return highlightRects.some((highlightRect) => (
@@ -230,6 +283,68 @@ export function PdfViewer() {
     persistHighlights(nextHighlights);
     selection.removeAllRanges();
     setSelectionNotice(`${removableIds.size}개의 하이라이트를 지웠습니다.`);
+  };
+
+  const renderPageShell = (targetPage: number) => {
+    const pageHighlights = highlightsByPage[targetPage] ?? [];
+
+    return (
+      <div
+        key={targetPage}
+        ref={(node) => {
+          pageShellRefs.current[targetPage] = node;
+        }}
+        data-page-number={targetPage}
+        className="pdf-page-shell overflow-hidden rounded-xl shadow-ambient"
+        onMouseUp={() => {
+          const pageShell = pageShellRefs.current[targetPage];
+
+          if (eraseMode) {
+            handleEraseSelection(targetPage, pageShell);
+            return;
+          }
+
+          handleHighlightSelection(targetPage, pageShell);
+        }}
+      >
+        <Page
+          pageNumber={targetPage}
+          width={pageWidth}
+          renderAnnotationLayer={false}
+          renderTextLayer
+          loading={
+            <div className="bg-surface-container-lowest rounded-xl shadow-ambient min-h-[560px] w-full max-w-[900px] flex items-center justify-center gap-2 text-sm text-on-surface-variant">
+              <Loader2 size={16} className="animate-spin" />
+              Rendering page...
+            </div>
+          }
+          error={
+            <div className="bg-surface-container-lowest rounded-xl shadow-ambient min-h-[560px] w-full max-w-[900px] flex items-center justify-center px-6 text-sm text-error text-center">
+              This page could not be rendered.
+            </div>
+          }
+        />
+        <div className="pdf-highlight-layer">
+          {pageHighlights.map((highlight) => {
+            const rects = highlight.rects?.length ? highlight.rects : [highlight.position];
+
+            return rects.map((rect, index) => (
+              <div
+                key={`${highlight.id}-${index}`}
+                className={`pdf-highlight-box pdf-highlight-box--${highlight.type}`}
+                style={{
+                  left: `${rect.x * 100}%`,
+                  top: `${rect.y * 100}%`,
+                  width: `${rect.width * 100}%`,
+                  height: `${rect.height * 100}%`,
+                }}
+                title={highlight.text}
+              />
+            ));
+          })}
+        </div>
+      </div>
+    );
   };
 
   if (!activePdf) return null;
@@ -271,6 +386,42 @@ export function PdfViewer() {
           <span className="ml-1 text-[11px] text-on-surface-variant font-medium tabular-nums min-w-14 text-center">
             {numPages ? `${pageNumber}/${numPages}` : '1/-'}
           </span>
+
+          <div className="w-px h-4 bg-outline-variant/30 mx-0.5" />
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setViewMode('paged')}
+              className={`h-6 rounded px-2 text-[11px] font-medium transition-colors ${
+                viewMode === 'paged'
+                  ? 'bg-on-surface text-surface-container-lowest'
+                  : 'text-on-surface-variant hover:bg-surface-container-high'
+              }`}
+              title="Single-page mode"
+            >
+              Page
+            </button>
+            <button
+              onClick={() => {
+                setViewMode('scroll');
+                window.requestAnimationFrame(() => {
+                  const pageShell = pageShellRefs.current[pageNumber];
+                  pageShell?.scrollIntoView({
+                    block: 'start',
+                    behavior: 'smooth',
+                  });
+                });
+              }}
+              className={`h-6 rounded px-2 text-[11px] font-medium transition-colors ${
+                viewMode === 'scroll'
+                  ? 'bg-on-surface text-surface-container-lowest'
+                  : 'text-on-surface-variant hover:bg-surface-container-high'
+              }`}
+              title="Vertical scroll mode"
+            >
+              Scroll
+            </button>
+          </div>
 
           <div className="w-px h-4 bg-outline-variant/30 mx-0.5" />
 
@@ -402,55 +553,13 @@ export function PdfViewer() {
               }
               onLoadSuccess={handleDocumentLoadSuccess}
             >
-              <div
-                ref={pageShellRef}
-                className="pdf-page-shell overflow-hidden rounded-xl shadow-ambient"
-                onMouseUp={() => {
-                  if (eraseMode) {
-                    handleEraseSelection();
-                    return;
-                  }
-
-                  handleHighlightSelection();
-                }}
-              >
-                <Page
-                  pageNumber={pageNumber}
-                  width={pageWidth}
-                  renderAnnotationLayer={false}
-                  renderTextLayer
-                  loading={
-                    <div className="bg-surface-container-lowest rounded-xl shadow-ambient min-h-[560px] w-full max-w-[900px] flex items-center justify-center gap-2 text-sm text-on-surface-variant">
-                      <Loader2 size={16} className="animate-spin" />
-                      Rendering page...
-                    </div>
-                  }
-                  error={
-                    <div className="bg-surface-container-lowest rounded-xl shadow-ambient min-h-[560px] w-full max-w-[900px] flex items-center justify-center px-6 text-sm text-error text-center">
-                      This page could not be rendered.
-                    </div>
-                  }
-                />
-                <div className="pdf-highlight-layer">
-                  {currentPageHighlights.map((highlight) => {
-                    const rects = highlight.rects?.length ? highlight.rects : [highlight.position];
-
-                    return rects.map((rect, index) => (
-                      <div
-                        key={`${highlight.id}-${index}`}
-                        className={`pdf-highlight-box pdf-highlight-box--${highlight.type}`}
-                        style={{
-                          left: `${rect.x * 100}%`,
-                          top: `${rect.y * 100}%`,
-                          width: `${rect.width * 100}%`,
-                          height: `${rect.height * 100}%`,
-                        }}
-                        title={highlight.text}
-                      />
-                    ));
-                  })}
+              {viewMode === 'scroll' ? (
+                <div className="flex flex-col items-center gap-6">
+                  {Array.from({ length: numPages ?? 0 }, (_, index) => renderPageShell(index + 1))}
                 </div>
-              </div>
+              ) : (
+                renderPageShell(pageNumber)
+              )}
             </Document>
           </div>
         </div>
