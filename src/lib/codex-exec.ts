@@ -1,4 +1,7 @@
 import { spawn } from 'child_process';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 
 import { getWorkspaceRoot } from '@/lib/annot-sessions';
 
@@ -50,6 +53,8 @@ interface ParsedEvent {
   message?: string;
 }
 
+let resolvedCodexExecutablePromise: Promise<string> | null = null;
+
 function buildPrompt({
   folderPath,
   sessionKind,
@@ -78,6 +83,61 @@ function buildPrompt({
   ];
 
   return contextLines.join('\n');
+}
+
+function getPathDirectories(): string[] {
+  const rawPath = process.env.PATH || '';
+  return rawPath
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function getCodexExecutableCandidates(): string[] {
+  const home = os.homedir();
+  const executableName = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+  const envCandidates = [
+    process.env.CODEX_BIN,
+    process.env.CODEX_PATH,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
+  const pathCandidates = getPathDirectories().map((dirPath) => path.join(dirPath, executableName));
+  const commonCandidates = [
+    path.join(home, '.npm-global', 'bin', executableName),
+    path.join(home, '.local', 'bin', executableName),
+    path.join(home, '.bun', 'bin', executableName),
+    path.join(home, '.codex', 'bin', executableName),
+    path.join('/Applications', 'Codex.app', 'Contents', 'Resources', executableName),
+    path.join('/opt/homebrew/bin', executableName),
+    path.join('/usr/local/bin', executableName),
+  ];
+
+  return [...new Set([...envCandidates, ...pathCandidates, ...commonCandidates])];
+}
+
+async function canExecute(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveCodexExecutable(): Promise<string> {
+  const candidates = getCodexExecutableCandidates();
+
+  for (const candidate of candidates) {
+    if (await canExecute(candidate)) {
+      return candidate;
+    }
+  }
+
+  const searchedPaths = candidates.slice(0, 12).join(', ');
+  throw new Error(
+    `Could not find the Codex CLI executable. Searched: ${searchedPaths}. ` +
+    'Set CODEX_BIN to the full path to your codex binary if needed.',
+  );
 }
 
 function createCodexArgs(input: RunTurnInput): string[] {
@@ -213,10 +273,15 @@ function emitParsedEvent(
 }
 
 export async function runCodexTurn(input: RunTurnInput, options: RunTurnOptions = {}): Promise<ExecResult> {
+  if (!resolvedCodexExecutablePromise) {
+    resolvedCodexExecutablePromise = resolveCodexExecutable();
+  }
+
+  const codexExecutable = await resolvedCodexExecutablePromise;
   const args = createCodexArgs(input);
 
   return new Promise<ExecResult>((resolve, reject) => {
-    const child = spawn('codex', args, {
+    const child = spawn(codexExecutable, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
     });
