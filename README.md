@@ -19,7 +19,7 @@ Annot uses your existing local Codex login on the same machine. No `OPENAI_API_K
 
 ### Settings
 
-![Annot settings](./screenshots/화면 캡처 2026-03-27 014814.png)
+![Annot settings](./screenshots/2.png)
 
 ## What It Does
 
