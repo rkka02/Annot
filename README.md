@@ -21,7 +21,7 @@ Annot uses your existing local Codex or Claude Code login on the same machine. N
 
 ### Settings
 
-![Annot settings](https://raw.githubusercontent.com/rkka02/Annot/main/screenshots/3.png?rev=20260330-1530)
+![Annot settings](https://raw.githubusercontent.com/rkka02/Annot/main/screenshots/settings.png?rev=20260330-1540)
 
 ## What It Does
 
