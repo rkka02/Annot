@@ -50,6 +50,57 @@ function saveHighlights(nextHighlights: Record<string, Highlight[]>): void {
   window.localStorage.setItem(HIGHLIGHTS_STORAGE_KEY, JSON.stringify(nextHighlights));
 }
 
+function getStoredHighlights(pdfPath: string): Highlight[] {
+  const highlightStore = loadHighlights();
+  return highlightStore[pdfPath] ?? [];
+}
+
+function setStoredHighlights(pdfPath: string, nextHighlights: Highlight[]): void {
+  const highlightStore = loadHighlights();
+  if (nextHighlights.length === 0) {
+    delete highlightStore[pdfPath];
+  } else {
+    highlightStore[pdfPath] = nextHighlights;
+  }
+  saveHighlights(highlightStore);
+}
+
+function getHighlightRects(highlight: Highlight): NormalizedHighlightRect[] {
+  return highlight.rects?.length ? highlight.rects : [highlight.position];
+}
+
+function buildHighlightSignature(highlight: Highlight): string {
+  const rects = getHighlightRects(highlight)
+    .map((rect) => (
+      `${rect.x.toFixed(4)}:${rect.y.toFixed(4)}:${rect.width.toFixed(4)}:${rect.height.toFixed(4)}`
+    ))
+    .join('|');
+
+  return [
+    highlight.page,
+    highlight.type,
+    highlight.text.trim().toLowerCase(),
+    rects,
+  ].join('::');
+}
+
+function mergeHighlights(highlights: Highlight[]): Highlight[] {
+  const seen = new Set<string>();
+  const merged: Highlight[] = [];
+
+  for (const highlight of highlights) {
+    const signature = buildHighlightSignature(highlight);
+    if (seen.has(signature)) {
+      continue;
+    }
+
+    seen.add(signature);
+    merged.push(highlight);
+  }
+
+  return merged;
+}
+
 export function PdfViewer() {
   const { activePdf, closePdf, activeSessionFolder, chatOpen, toggleChat } = useWorkspace();
   const activePdfPath = activePdf?.path ?? '';
@@ -60,12 +111,9 @@ export function PdfViewer() {
   const [containerWidth, setContainerWidth] = useState(720);
   const [highlightMode, setHighlightMode] = useState<HighlightMode>(null);
   const [eraseMode, setEraseMode] = useState(false);
-  const [highlights, setHighlights] = useState<Highlight[]>(() => {
-    if (!activePdfPath) return [];
-    const highlightStore = loadHighlights();
-    return highlightStore[activePdfPath] ?? [];
-  });
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
+  const [annotationSyncing, setAnnotationSyncing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const pageShellRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
@@ -98,6 +146,91 @@ export function PdfViewer() {
 
     return () => window.clearTimeout(timeout);
   }, [selectionNotice]);
+
+  useEffect(() => {
+    if (!activePdfPath) {
+      setHighlights([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadPdfHighlights = async () => {
+      setAnnotationSyncing(true);
+
+      const legacyHighlights = getStoredHighlights(activePdfPath);
+
+      try {
+        const res = await fetch(`/api/workspace/annotations?path=${encodeURIComponent(activePdfPath)}`, {
+          cache: 'no-store',
+        });
+        const data = await res.json();
+
+        if (!res.ok || data?.error) {
+          throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to load PDF annotations.');
+        }
+
+        let nextHighlights = Array.isArray(data.highlights) ? data.highlights as Highlight[] : [];
+
+        if (legacyHighlights.length > 0) {
+          try {
+            const migrateRes = await fetch('/api/workspace/annotations', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                pdfPath: activePdfPath,
+                highlights: legacyHighlights,
+              }),
+            });
+            const migrateData = await migrateRes.json();
+
+            if (!migrateRes.ok || migrateData?.error) {
+              throw new Error(typeof migrateData?.error === 'string' ? migrateData.error : 'Failed to migrate local highlights.');
+            }
+
+            nextHighlights = Array.isArray(migrateData.highlights)
+              ? migrateData.highlights as Highlight[]
+              : nextHighlights;
+            setStoredHighlights(activePdfPath, []);
+
+            if (!cancelled && typeof migrateData.migrated === 'number' && migrateData.migrated > 0) {
+              setSelectionNotice(`Migrated ${migrateData.migrated} local highlight${migrateData.migrated === 1 ? '' : 's'} into the PDF.`);
+            }
+          } catch (error) {
+            nextHighlights = mergeHighlights([...nextHighlights, ...legacyHighlights]);
+
+            if (!cancelled) {
+              const message = error instanceof Error
+                ? error.message
+                : 'Could not migrate existing local highlights yet.';
+              setSelectionNotice(message);
+            }
+          }
+        }
+
+        if (!cancelled) {
+          setHighlights(nextHighlights);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : 'Failed to load PDF annotations.';
+          const fallbackHighlights = legacyHighlights.length > 0 ? legacyHighlights : [];
+          setHighlights(fallbackHighlights);
+          setSelectionNotice(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setAnnotationSyncing(false);
+        }
+      }
+    };
+
+    void loadPdfHighlights();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePdfPath]);
 
   useEffect(() => {
     if (viewMode !== 'scroll' || !numPages) return;
@@ -164,15 +297,6 @@ export function PdfViewer() {
     setPageNumber(nextPage);
   };
 
-  const persistHighlights = (nextHighlights: Highlight[]) => {
-    if (!activePdfPath) return;
-
-    setHighlights(nextHighlights);
-    const highlightStore = loadHighlights();
-    highlightStore[activePdfPath] = nextHighlights;
-    saveHighlights(highlightStore);
-  };
-
   const getSelectionRects = (pageShell: HTMLDivElement | null): NormalizedHighlightRect[] => {
     const selection = window.getSelection();
 
@@ -203,8 +327,8 @@ export function PdfViewer() {
       .filter((rect): rect is NormalizedHighlightRect => rect !== null);
   };
 
-  const handleHighlightSelection = (targetPage: number, pageShell: HTMLDivElement | null) => {
-    if (!highlightMode || eraseMode || !activePdfPath) return;
+  const handleHighlightSelection = async (targetPage: number, pageShell: HTMLDivElement | null) => {
+    if (!highlightMode || eraseMode || !activePdfPath || annotationSyncing) return;
 
     const selection = window.getSelection();
     const selectedText = selection?.toString().trim() ?? '';
@@ -229,10 +353,34 @@ export function PdfViewer() {
       rects,
       position: rects[0],
     };
-
-    persistHighlights([...highlights, nextHighlight]);
     selection.removeAllRanges();
-    setSelectionNotice(`${highlightMode === 'important' ? 'Important' : 'Unknown'} highlight saved.`);
+
+    try {
+      setAnnotationSyncing(true);
+
+      const res = await fetch('/api/workspace/annotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pdfPath: activePdfPath,
+          highlights: [nextHighlight],
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || data?.error) {
+        throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to save highlight.');
+      }
+
+      const legacyHighlights = getStoredHighlights(activePdfPath);
+      setHighlights(mergeHighlights([...(data.highlights as Highlight[]), ...legacyHighlights]));
+      setSelectionNotice(`${highlightMode === 'important' ? 'Important' : 'Unknown'} highlight saved to the PDF.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save highlight.';
+      setSelectionNotice(message);
+    } finally {
+      setAnnotationSyncing(false);
+    }
   };
 
   const selectionContainsHighlightRect = (
@@ -250,8 +398,8 @@ export function PdfViewer() {
     );
   };
 
-  const handleEraseSelection = (targetPage: number, pageShell: HTMLDivElement | null) => {
-    if (!eraseMode) return;
+  const handleEraseSelection = async (targetPage: number, pageShell: HTMLDivElement | null) => {
+    if (!eraseMode || annotationSyncing || !activePdfPath) return;
 
     const selection = window.getSelection();
     const rects = getSelectionRects(pageShell);
@@ -265,7 +413,7 @@ export function PdfViewer() {
     const removableIds = new Set(
       pageHighlights
         .filter((highlight) => {
-          const highlightRects = highlight.rects?.length ? highlight.rects : [highlight.position];
+          const highlightRects = getHighlightRects(highlight);
           return highlightRects.some((highlightRect) => (
             rects.some((selectionRect) => selectionContainsHighlightRect(selectionRect, highlightRect))
           ));
@@ -279,10 +427,49 @@ export function PdfViewer() {
       return;
     }
 
-    const nextHighlights = highlights.filter((highlight) => !removableIds.has(highlight.id));
-    persistHighlights(nextHighlights);
     selection.removeAllRanges();
-    setSelectionNotice(`${removableIds.size}개의 하이라이트를 지웠습니다.`);
+
+    const removableHighlights = highlights.filter((highlight) => removableIds.has(highlight.id));
+    const nativeAnnotationIds = removableHighlights
+      .map((highlight) => highlight.annotationId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
+    const remainingLegacyHighlights = highlights.filter((highlight) => (
+      !highlight.annotationId && !removableIds.has(highlight.id)
+    ));
+
+    try {
+      setAnnotationSyncing(true);
+
+      if (nativeAnnotationIds.length > 0) {
+        const res = await fetch('/api/workspace/annotations', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pdfPath: activePdfPath,
+            annotationIds: nativeAnnotationIds,
+          }),
+        });
+        const data = await res.json();
+
+        if (!res.ok || data?.error) {
+          throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to erase highlight.');
+        }
+
+        const nativeHighlights = Array.isArray(data.highlights) ? data.highlights as Highlight[] : [];
+        setStoredHighlights(activePdfPath, remainingLegacyHighlights);
+        setHighlights(mergeHighlights([...nativeHighlights, ...remainingLegacyHighlights]));
+      } else {
+        setStoredHighlights(activePdfPath, remainingLegacyHighlights);
+        setHighlights((current) => current.filter((highlight) => !removableIds.has(highlight.id)));
+      }
+
+      setSelectionNotice(`Removed ${removableIds.size} highlight${removableIds.size === 1 ? '' : 's'}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to erase highlight.';
+      setSelectionNotice(message);
+    } finally {
+      setAnnotationSyncing(false);
+    }
   };
 
   const renderPageShell = (targetPage: number) => {
@@ -300,11 +487,11 @@ export function PdfViewer() {
           const pageShell = pageShellRefs.current[targetPage];
 
           if (eraseMode) {
-            handleEraseSelection(targetPage, pageShell);
+            void handleEraseSelection(targetPage, pageShell);
             return;
           }
 
-          handleHighlightSelection(targetPage, pageShell);
+          void handleHighlightSelection(targetPage, pageShell);
         }}
       >
         <Page
@@ -523,13 +710,16 @@ export function PdfViewer() {
             </h1>
             <div className="mt-2 flex items-center gap-2 text-[11px] text-on-surface-variant">
               {eraseMode ? (
-                <span>Erase mode is on. 텍스트를 선택하면 그 영역에 걸친 하이라이트를 지웁니다.</span>
+                <span>Erase mode is on. Select text over highlighted content to remove those PDF highlights.</span>
               ) : highlightMode ? (
                 <span>
-                  {highlightMode === 'important' ? 'Important' : 'Unknown'} highlight mode is on. Select text on the page to save a highlight.
+                  {highlightMode === 'important' ? 'Important' : 'Unknown'} highlight mode is on. Select text on the page to save a PDF highlight.
                 </span>
               ) : (
                 <span>Selectable text can be dragged directly on PDFs that include a text layer.</span>
+              )}
+              {annotationSyncing && (
+                <span className="text-outline">Syncing annotations...</span>
               )}
               {selectionNotice && (
                 <span className="text-outline">{selectionNotice}</span>

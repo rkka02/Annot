@@ -39,6 +39,7 @@ export interface ChatMessage {
 
 export interface Highlight {
   id: string;
+  annotationId?: string;
   pdfPath: string;
   page: number;
   type: 'important' | 'unknown';
