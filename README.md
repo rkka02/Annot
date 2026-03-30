@@ -50,6 +50,8 @@ Before you start, make sure you have:
 
 Annot reuses your local CLI authentication state. Sign in through the provider you want to use before opening the app.
 
+For the best paper-reading experience, it is also recommended to install the official PDF or document-reading skill/package for the agent runtime you plan to use most. Annot works without those extras, but Codex and Claude Code generally do better on PDF-heavy workflows when their official PDF-focused tools are available.
+
 For example:
 
 ```bash
@@ -159,6 +161,7 @@ Annot restores the right session for the current folder or PDF so you can contin
 - Annot is designed to work with your local Codex or Claude Code authentication state.
 - The app reads and manages files locally.
 - On Windows, Annot will automatically look for `codex`, `codex.exe`, `claude`, `claude.exe`, `python`, and `py`.
+- If your preferred agent has an official PDF/document-reading skill, install that too for better PDF-specific assistance.
 - The default provider is configured in `Settings` and only saved after a live validation check succeeds.
 - Existing sessions stay on the provider they were created with.
 - PDF highlights are written back into the original PDF file.
