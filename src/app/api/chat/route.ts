@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { appendMessage, getSession, updateSession } from '@/lib/annot-sessions';
-import { runCodexTurn } from '@/lib/codex-exec';
+import { getProviderRuntime } from '@/lib/ai-providers';
 
 export async function POST(req: NextRequest) {
   try {
@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
       timestamp: new Date().toISOString(),
     };
     const resolvedModel = model || session.model || 'gpt-5.4-mini';
+    const runtime = getProviderRuntime(session.provider);
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream<Uint8Array>({
@@ -51,8 +52,8 @@ export async function POST(req: NextRequest) {
 
         void (async () => {
           try {
-            const turn = await runCodexTurn({
-              codexSessionId: session.codexSessionId,
+            const turn = await runtime.runTurn({
+              providerSessionId: session.providerSessionId,
               model: resolvedModel,
               folderPath,
               prompt: prompt.trim(),
@@ -79,7 +80,8 @@ export async function POST(req: NextRequest) {
 
             const updatedSession = await updateSession(folderPath, sessionId, {
               messages: nextMessages,
-              codexSessionId: turn.codexSessionId,
+              provider: session.provider,
+              providerSessionId: turn.providerSessionId,
               model: resolvedModel,
             });
 
@@ -87,6 +89,7 @@ export async function POST(req: NextRequest) {
               type: 'final',
               content: assistantMessage.content,
               model: assistantMessage.model,
+              provider: session.provider,
               session: updatedSession,
             });
           } catch (error) {

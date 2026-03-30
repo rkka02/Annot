@@ -13,17 +13,19 @@ export interface TreeNode {
 // ── Sessions ────────────────────────────────────────────────────
 
 export type SessionKind = 'folder' | 'pdf';
+export type AIProvider = 'codex' | 'claude';
 
 export interface Session {
   id: string;
   folderPath: string;      // which folder this session belongs to
   sessionKind: SessionKind;
   pdfPath?: string;
+  provider: AIProvider;
+  providerSessionId?: string;
   title: string;
   createdAt: string;
   updatedAt: string;
   messages: ChatMessage[];
-  codexSessionId?: string;
   model?: string;
 }
 

@@ -1,23 +1,21 @@
 import { NextResponse } from 'next/server';
-import { fetchCodexModels } from '@/lib/codex-auth';
+import { NextRequest } from 'next/server';
+import { getProviderRuntime } from '@/lib/ai-providers';
+import { DEFAULT_AI_PROVIDER, parseAIProvider } from '@/lib/ai-providers/config';
 
-// GET /api/models — Fetch available models from the Codex backend
-export async function GET() {
-  const models = await fetchCodexModels();
-  if (!models) {
-    return NextResponse.json(
-      { error: 'Not authenticated. Sign in to Codex on this machine first.' },
-      { status: 401 }
-    );
-  }
-
+// GET /api/models — Fetch available models from the active runtime provider
+export async function GET(req: NextRequest) {
   try {
-    return NextResponse.json({ models });
+    const provider = parseAIProvider(req.nextUrl.searchParams.get('provider')) ?? DEFAULT_AI_PROVIDER;
+    const runtime = getProviderRuntime(provider);
+    const models = await runtime.listModels();
+    return NextResponse.json({ provider, models });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch models';
+    const status = message.includes('Not authenticated') ? 401 : 500;
     return NextResponse.json(
       { error: message },
-      { status: 500 }
+      { status }
     );
   }
 }

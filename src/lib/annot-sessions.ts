@@ -2,24 +2,30 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { ChatMessage, Session, SessionKind } from '@/types';
+import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
+import { AIProvider, ChatMessage, Session, SessionKind } from '@/types';
 
 const WORKSPACE_ROOT = process.env.ANNOT_ROOT || path.join(os.homedir(), 'Annot');
 
-export interface StoredSession extends Session {
+export type StoredSession = Session;
+
+interface StoredSessionRecord extends Omit<StoredSession, 'provider'> {
+  provider?: AIProvider;
+  providerSessionId?: string;
   codexSessionId?: string;
-  model?: string;
 }
 
 interface SessionListOptions {
   sessionKind?: SessionKind;
   pdfPath?: string | null;
+  provider?: AIProvider;
 }
 
 interface CreateSessionOptions {
   model?: string;
   sessionKind?: SessionKind;
   pdfPath?: string | null;
+  provider?: AIProvider;
 }
 
 interface SessionPathRewrite {
@@ -60,7 +66,8 @@ async function pathExists(relativePath: string): Promise<boolean> {
 async function readSessionsFile(folderPath: string): Promise<StoredSession[]> {
   const sessionsFile = await ensureSessionsFile(folderPath);
   const raw = await fs.readFile(sessionsFile, 'utf8');
-  return JSON.parse(raw) as StoredSession[];
+  const records = JSON.parse(raw) as StoredSessionRecord[];
+  return records.map((session) => normalizeSession(folderPath, session));
 }
 
 export function getWorkspaceRoot(): string {
@@ -135,18 +142,27 @@ async function inferPdfPathFromSession(folderPath: string, session: StoredSessio
   return matches.length === 1 ? matches[0] : null;
 }
 
-function normalizeSession(folderPath: string, session: StoredSession): StoredSession {
+function normalizeSession(folderPath: string, session: StoredSessionRecord): StoredSession {
   const normalizedFolderPath = sanitizeRelativePath(folderPath);
   const sessionKind = session.sessionKind === 'pdf' || typeof session.pdfPath === 'string' ? 'pdf' : 'folder';
   const normalizedPdfPath = typeof session.pdfPath === 'string' && session.pdfPath.length > 0
     ? normalizePdfPath(session.pdfPath)
     : undefined;
+  const provider = session.provider ?? DEFAULT_AI_PROVIDER;
+  const providerSessionId = session.providerSessionId ?? session.codexSessionId;
 
   return {
-    ...session,
+    id: session.id,
     folderPath: normalizedFolderPath,
     sessionKind,
     pdfPath: normalizedPdfPath,
+    provider,
+    providerSessionId,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    messages: Array.isArray(session.messages) ? session.messages : [],
+    model: session.model,
   };
 }
 
@@ -198,6 +214,10 @@ async function reconcileSession(folderPath: string, session: StoredSession): Pro
 }
 
 function matchesSession(session: StoredSession, options: SessionListOptions): boolean {
+  if (options.provider && session.provider !== options.provider) {
+    return false;
+  }
+
   if (options.sessionKind && session.sessionKind !== options.sessionKind) {
     return false;
   }
@@ -235,7 +255,20 @@ export async function listSessions(folderPath: string, options: SessionListOptio
 
 async function writeSessions(folderPath: string, sessions: StoredSession[]): Promise<void> {
   const sessionsFile = await ensureSessionsFile(folderPath);
-  await fs.writeFile(sessionsFile, JSON.stringify(sessions, null, 2));
+  const cleanedSessions = sessions.map((session) => ({
+    id: session.id,
+    folderPath: session.folderPath,
+    sessionKind: session.sessionKind,
+    pdfPath: session.pdfPath,
+    provider: session.provider,
+    providerSessionId: session.providerSessionId,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    messages: session.messages,
+    model: session.model,
+  }));
+  await fs.writeFile(sessionsFile, JSON.stringify(cleanedSessions, null, 2));
 }
 
 function rewriteRelativePathPrefix(targetPath: string | undefined, rewrite: SessionPathRewrite): string | undefined {
@@ -295,6 +328,7 @@ export async function createSession(
   await ensureFolderExists(folderPath);
 
   const sessionKind = options.sessionKind === 'pdf' ? 'pdf' : 'folder';
+  const provider = options.provider ?? DEFAULT_AI_PROVIDER;
   const pdfPath = sessionKind === 'pdf' && options.pdfPath
     ? normalizePdfPath(options.pdfPath)
     : undefined;
@@ -305,6 +339,7 @@ export async function createSession(
     folderPath: sanitizeRelativePath(folderPath),
     sessionKind,
     pdfPath,
+    provider,
     title,
     createdAt: now,
     updatedAt: now,
@@ -321,7 +356,7 @@ export async function createSession(
 export async function updateSession(
   folderPath: string,
   sessionId: string,
-  updates: Partial<Pick<StoredSession, 'messages' | 'title' | 'codexSessionId' | 'model'>>
+  updates: Partial<Pick<StoredSession, 'messages' | 'title' | 'provider' | 'providerSessionId' | 'model'>>
 ): Promise<StoredSession> {
   const sessions = await listSessions(folderPath);
   const index = sessions.findIndex((session) => session.id === sessionId);

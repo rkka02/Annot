@@ -6,8 +6,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
 import { useWorkspace } from '@/lib/workspace-store';
-import { ChatMessage, Session, SessionKind } from '@/types';
+import { AI_PROVIDER_EVENT, readStoredAIProvider } from '@/lib/provider-preferences';
+import { AIProvider, ChatMessage, Session, SessionKind } from '@/types';
 import {
   CHAT_FONT_SIZE_EVENT,
   DEFAULT_CHAT_FONT_SIZE,
@@ -51,6 +53,7 @@ interface FinalEvent {
   type: 'final';
   content?: string;
   model?: string;
+  provider?: AIProvider;
   session?: Session;
 }
 
@@ -73,6 +76,7 @@ interface SessionUiState {
   thinkingOpen: boolean;
   thinkingDraft: string;
   messages: ChatMessage[];
+  provider: AIProvider;
   selectedModel?: string;
 }
 
@@ -89,6 +93,7 @@ function createDefaultSessionUiState(): SessionUiState {
     thinkingOpen: false,
     thinkingDraft: '',
     messages: [],
+    provider: DEFAULT_AI_PROVIDER,
   };
 }
 
@@ -109,6 +114,7 @@ export function ChatPanel() {
   const [, setSessionUiMap] = useState<Record<string, SessionUiState>>({});
   const [models, setModels] = useState<AvailableModel[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
+  const [selectedProvider, setSelectedProvider] = useState<AIProvider>(readStoredAIProvider());
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [thinkingOpen, setThinkingOpen] = useState(false);
@@ -125,11 +131,13 @@ export function ChatPanel() {
   const buildSessionQuery = (
     folderPath: string,
     sessionKind: SessionKind,
+    provider: AIProvider,
     pdfPath?: string | null,
   ) => {
     const params = new URLSearchParams({
       folderPath,
       sessionKind,
+      provider,
     });
 
     if (sessionKind === 'pdf' && pdfPath) {
@@ -164,6 +172,7 @@ export function ChatPanel() {
     setSessionLoading(state.sessionLoading);
     setThinkingOpen(state.thinkingOpen);
     setThinkingDraft(state.thinkingDraft);
+    setSelectedProvider(state.provider);
     if (state.selectedModel) {
       setSelectedModel(state.selectedModel);
     }
@@ -175,6 +184,7 @@ export function ChatPanel() {
     setSessionLoading(false);
     setThinkingOpen(false);
     setThinkingDraft('');
+    setSelectedProvider(readStoredAIProvider());
   }, []);
 
   const commitSessionUiState = useCallback((
@@ -198,7 +208,9 @@ export function ChatPanel() {
     return nextState;
   }, [applyVisibleSessionState]);
 
-  useEffect(() => { fetchModels(); }, []);
+  useEffect(() => {
+    void fetchModels(selectedProvider);
+  }, [selectedProvider]);
   useEffect(() => {
     const syncChatFontSize = () => {
       setChatFontSize(readStoredChatFontSize());
@@ -226,6 +238,22 @@ export function ChatPanel() {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+  useEffect(() => {
+    const syncProvider = () => {
+      if (!activeSessionIdRef.current) {
+        setSelectedProvider(readStoredAIProvider());
+      }
+    };
+
+    syncProvider();
+    window.addEventListener('storage', syncProvider);
+    window.addEventListener(AI_PROVIDER_EVENT, syncProvider);
+
+    return () => {
+      window.removeEventListener('storage', syncProvider);
+      window.removeEventListener(AI_PROVIDER_EVENT, syncProvider);
+    };
+  }, []);
 
   useEffect(() => {
     if (!activeSessionFolder || !activeSessionKind || activeSessionId) return;
@@ -234,12 +262,13 @@ export function ChatPanel() {
 
     const attachLatestSession = async () => {
       try {
-        const params = buildSessionQuery(activeSessionFolder, activeSessionKind, activeSessionPdfPath);
+        const params = buildSessionQuery(activeSessionFolder, activeSessionKind, selectedProvider, activeSessionPdfPath);
         const res = await fetch(`/api/sessions?${params.toString()}`);
         const data = await res.json();
         const latestSession = pickLatestSession(data);
 
         if (!cancelled && latestSession) {
+          setSelectedProvider(latestSession.provider || readStoredAIProvider() || DEFAULT_AI_PROVIDER);
           openSession(latestSession);
         }
       } catch {
@@ -252,7 +281,7 @@ export function ChatPanel() {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionFolder, activeSessionId, activeSessionKind, activeSessionPdfPath, openSession]);
+  }, [activeSessionFolder, activeSessionId, activeSessionKind, activeSessionPdfPath, openSession, selectedProvider]);
 
   useEffect(() => {
     if (!activeSessionFolder || !activeSessionId) {
@@ -291,6 +320,7 @@ export function ChatPanel() {
           commitSessionUiState(activeSessionId, (current) => ({
             ...current,
             messages: Array.isArray(data.messages) ? data.messages : [],
+            provider: data.provider || current.provider || readStoredAIProvider() || DEFAULT_AI_PROVIDER,
             sessionLoading: false,
             selectedModel: typeof data.model === 'string' && data.model ? data.model : current.selectedModel,
           }));
@@ -345,14 +375,23 @@ export function ChatPanel() {
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  const fetchModels = async () => {
+  const fetchModels = async (provider: AIProvider) => {
     setModelsLoading(true);
     try {
-      const res = await fetch('/api/models');
+      const params = new URLSearchParams({ provider });
+      const res = await fetch(`/api/models?${params.toString()}`);
       const data = await res.json();
       if (data.models?.length > 0) {
         setModels(data.models);
-        setSelectedModel(data.models[0].id);
+        setSelectedModel((currentSelectedModel) => {
+          if (data.models.some((model: AvailableModel) => model.id === currentSelectedModel)) {
+            return currentSelectedModel;
+          }
+          return data.models[0].id;
+        });
+      } else {
+        setModels([]);
+        setSelectedModel('');
       }
     } catch { /* fallback */ }
     finally { setModelsLoading(false); }
@@ -367,12 +406,13 @@ export function ChatPanel() {
       throw new Error('No active folder selected');
     }
 
-    const params = buildSessionQuery(activeSessionFolder, activeSessionKind, activeSessionPdfPath);
+    const params = buildSessionQuery(activeSessionFolder, activeSessionKind, selectedProvider, activeSessionPdfPath);
     const existingSessionsRes = await fetch(`/api/sessions?${params.toString()}`);
     const existingSessions = await existingSessionsRes.json();
     const latestSession = pickLatestSession(existingSessions);
 
     if (latestSession) {
+      setSelectedProvider(latestSession.provider || readStoredAIProvider() || DEFAULT_AI_PROVIDER);
       skipSessionHydrationRef.current = latestSession.id;
       openSession(latestSession);
       return latestSession.id;
@@ -392,6 +432,7 @@ export function ChatPanel() {
         folderPath: activeSessionFolder,
         title: fallbackTitle,
         model: selectedModel || undefined,
+        provider: selectedProvider,
         sessionKind: activeSessionKind,
         pdfPath: activeSessionKind === 'pdf' ? activeSessionPdfPath : null,
       }),
@@ -403,6 +444,7 @@ export function ChatPanel() {
     }
 
     skipSessionHydrationRef.current = data.id as string;
+    setSelectedProvider((data.provider as AIProvider) || selectedProvider);
     openSession(data as Session);
     return data.id as string;
   };
@@ -535,6 +577,7 @@ export function ChatPanel() {
         thinkingDraft: '',
         thinkingOpen: false,
         selectedModel: event.model || fallbackModel,
+        provider: event.provider || current.provider,
       }));
       return;
     }
@@ -544,12 +587,12 @@ export function ChatPanel() {
         ...current,
         messages: [
           ...updatedMessages,
-          {
-            id: `c${Date.now()}`,
-            role: 'assistant',
-            content: `**Error:** ${event.message || 'Failed to connect. Check your Codex login in Settings.'}`,
-            timestamp: new Date().toISOString(),
-          },
+            {
+              id: `c${Date.now()}`,
+              role: 'assistant',
+              content: `**Error:** ${event.message || 'Failed to connect. Check the active provider in Settings.'}`,
+              timestamp: new Date().toISOString(),
+            },
         ],
         isLoading: false,
         sessionLoading: false,
@@ -593,9 +636,9 @@ export function ChatPanel() {
           folderPath: activeSessionFolder,
           sessionId,
           prompt: userMessage.content,
-          model: selectedModel,
-          currentPdfPath: activeSessionKind === 'pdf'
-            ? (activeSessionPdfPath || activePdf?.path || null)
+            model: selectedModel,
+            currentPdfPath: activeSessionKind === 'pdf'
+              ? (activeSessionPdfPath || activePdf?.path || null)
             : (activePdf?.path || null),
         }),
       });
@@ -641,7 +684,7 @@ export function ChatPanel() {
     } catch (error) {
       const message = error instanceof Error
         ? error.message
-        : 'Failed to connect. Check your Codex login in Settings.';
+        : 'Failed to connect. Check the active provider in Settings.';
       if (targetSessionId) {
         commitSessionUiState(targetSessionId, (current) => ({
           ...current,

@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { LogIn, Server, Palette, Loader2, CheckCircle2, RefreshCw, ArrowLeft } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Loader2, LogIn, Palette, RefreshCw, Server } from 'lucide-react';
 import Link from 'next/link';
+import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
 import {
   DEFAULT_CHAT_FONT_SIZE,
   MAX_CHAT_FONT_SIZE,
@@ -10,36 +11,106 @@ import {
   readStoredChatFontSize,
   writeStoredChatFontSize,
 } from '@/lib/chat-preferences';
+import { readStoredAIProvider, writeStoredAIProvider } from '@/lib/provider-preferences';
+import { AIProvider } from '@/types';
 
-interface AuthStatus {
+interface ProviderStatus {
+  provider: AIProvider;
   authenticated: boolean;
+  error?: string;
   hasRefreshToken?: boolean;
-  isExpired?: boolean;
   expiresAt?: number;
   planType?: string;
   email?: string;
+  authMethod?: string;
+}
+
+interface ProviderValidationResult {
+  provider: AIProvider;
+  ok: boolean;
+  message: string;
+  model?: string;
+  response?: string;
 }
 
 export default function SettingsPage() {
-  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [savedProvider, setSavedProvider] = useState<AIProvider>(DEFAULT_AI_PROVIDER);
+  const [candidateProvider, setCandidateProvider] = useState<AIProvider>(DEFAULT_AI_PROVIDER);
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
+  const [validationResult, setValidationResult] = useState<ProviderValidationResult | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
   const [chatFontSize, setChatFontSize] = useState(DEFAULT_CHAT_FONT_SIZE);
 
   useEffect(() => {
-    void checkAuth();
+    const storedProvider = readStoredAIProvider();
+    setSavedProvider(storedProvider);
+    setCandidateProvider(storedProvider);
+    void checkProvider(storedProvider);
     setChatFontSize(readStoredChatFontSize());
   }, []);
 
-  const checkAuth = async () => {
+  useEffect(() => {
+    if (!candidateProvider) return;
+    void checkProvider(candidateProvider);
+    setValidationResult(null);
+  }, [candidateProvider]);
+
+  const getProviderLabel = (provider: AIProvider) => (
+    provider === 'claude' ? 'Claude Code' : 'Codex'
+  );
+
+  const checkProvider = async (provider: AIProvider) => {
     setIsRefreshing(true);
     try {
-      const res = await fetch('/api/auth/status');
+      const res = await fetch(`/api/providers/status?provider=${provider}`);
       const data = await res.json();
-      setAuthStatus(data);
+      setProviderStatus(data);
     } catch {
-      setAuthStatus({ authenticated: false });
+      setProviderStatus({
+        provider,
+        authenticated: false,
+        error: 'Failed to load provider status.',
+      });
     } finally {
       setIsRefreshing(false);
+    }
+  };
+
+  const handleValidateAndSave = async () => {
+    setIsValidating(true);
+    setValidationResult(null);
+
+    try {
+      const res = await fetch('/api/providers/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: candidateProvider }),
+      });
+      const data = await res.json();
+      const result = {
+        provider: candidateProvider,
+        ok: Boolean(data?.ok),
+        message: typeof data?.message === 'string' ? data.message : 'Provider validation failed.',
+        model: typeof data?.model === 'string' ? data.model : undefined,
+        response: typeof data?.response === 'string' ? data.response : undefined,
+      } satisfies ProviderValidationResult;
+
+      setValidationResult(result);
+
+      if (res.ok && result.ok) {
+        writeStoredAIProvider(candidateProvider);
+        setSavedProvider(candidateProvider);
+        await checkProvider(candidateProvider);
+      }
+    } catch {
+      setValidationResult({
+        provider: candidateProvider,
+        ok: false,
+        message: 'Provider validation failed.',
+      });
+    } finally {
+      setIsValidating(false);
     }
   };
 
@@ -63,71 +134,128 @@ export default function SettingsPage() {
           Configure your research environment.
         </p>
 
-        {/* Codex Connection */}
+        {/* AI Provider */}
         <section className="mb-10">
           <div className="flex items-center gap-2 mb-5">
             <LogIn size={16} strokeWidth={2} className="text-on-surface-variant" />
-            <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">Codex Connection</h2>
+            <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">AI Provider</h2>
           </div>
 
-          <div className="bg-surface-container-lowest rounded-lg p-5">
-            {authStatus === null ? (
-              <div className="flex items-center gap-2 text-on-surface-variant">
-                <Loader2 size={16} className="animate-spin" />
-                <span className="text-sm">Checking connection...</span>
-              </div>
-            ) : authStatus.authenticated ? (
+          <div className="bg-surface-container-lowest rounded-lg p-5 space-y-5">
+            <div className="flex items-center justify-between gap-4">
               <div>
-                <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-medium text-on-surface">Default provider</p>
+                <p className="text-xs text-on-surface-variant mt-0.5">
+                  New chat sessions will use this provider unless an existing session already pins another one.
+                </p>
+              </div>
+              <span className="rounded bg-surface-container px-3 py-1 text-xs font-semibold text-on-surface-variant">
+                {getProviderLabel(savedProvider)}
+              </span>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-on-surface-variant mb-2">
+                  Provider
+                </label>
+                <select
+                  value={candidateProvider}
+                  onChange={(event) => setCandidateProvider(event.target.value as AIProvider)}
+                  className="w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm text-on-surface outline-none"
+                >
+                  <option value="codex">Codex</option>
+                  <option value="claude">Claude Code</option>
+                </select>
+              </div>
+
+              <button
+                onClick={() => void checkProvider(candidateProvider)}
+                disabled={isRefreshing}
+                className="flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-on-surface-variant hover:bg-surface-container transition-colors disabled:opacity-50"
+              >
+                <RefreshCw size={12} strokeWidth={2} className={isRefreshing ? 'animate-spin' : ''} />
+                Refresh status
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-surface-container px-4 py-4">
+              {providerStatus === null ? (
+                <div className="flex items-center gap-2 text-on-surface-variant">
+                  <Loader2 size={16} className="animate-spin" />
+                  <span className="text-sm">Checking provider status...</span>
+                </div>
+              ) : providerStatus.authenticated ? (
+                <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 size={18} className="text-emerald-600" />
-                    <span className="text-sm font-semibold text-on-surface">Connected via Codex</span>
+                    <span className="text-sm font-semibold text-on-surface">
+                      {getProviderLabel(providerStatus.provider)} is available on this machine
+                    </span>
                   </div>
-                  <button
-                    onClick={() => void checkAuth()}
-                    disabled={isRefreshing}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium text-on-surface-variant hover:bg-surface-container transition-colors disabled:opacity-50"
-                  >
-                    <RefreshCw size={12} strokeWidth={2} className={isRefreshing ? 'animate-spin' : ''} />
-                    Refresh
-                  </button>
+                  <p className="text-xs text-on-surface-variant">
+                    {providerStatus.email && <>Signed in as {providerStatus.email}. </>}
+                    {providerStatus.planType && <>Plan: {providerStatus.planType}. </>}
+                    {providerStatus.authMethod && <>Auth: {providerStatus.authMethod}. </>}
+                    {providerStatus.expiresAt && (
+                      <>Token expires {new Date(providerStatus.expiresAt).toLocaleDateString()}.
+                      {providerStatus.hasRefreshToken && ' Auto-refresh enabled.'}</>
+                    )}
+                  </p>
                 </div>
-                <p className="text-xs text-on-surface-variant">
-                  Annot is using the local Codex login from this machine.
-                  {authStatus.planType && <> Plan: {authStatus.planType}.</>}
-                  {authStatus.email && <> Signed in as {authStatus.email}.</>}
-                  {authStatus.expiresAt && (
-                    <> Token expires {new Date(authStatus.expiresAt).toLocaleDateString()}.
-                    {authStatus.hasRefreshToken && ' Auto-refresh enabled.'}</>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-sm text-on-surface-variant">
+                    {candidateProvider === 'claude'
+                      ? 'Annot could not confirm a usable Claude Code login on this machine yet.'
+                      : 'Annot could not confirm a usable Codex login on this machine yet.'}
+                  </p>
+                  {providerStatus.error && (
+                    <p className="text-xs text-rose-700">{providerStatus.error}</p>
                   )}
-                </p>
-              </div>
-            ) : (
-              <div>
-                <p className="text-sm text-on-surface-variant mb-4">
-                  Browser OAuth is disabled here. Annot now reuses the existing Codex login on this machine.
-                  Sign in to Codex first, then refresh this status.
-                </p>
-                <button
-                  onClick={() => void checkAuth()}
-                  disabled={isRefreshing}
-                  className="btn-gradient text-on-primary px-5 py-2.5 rounded-sm text-sm font-semibold flex items-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50"
-                >
-                  {isRefreshing ? (
-                    <>
-                      <Loader2 size={15} className="animate-spin" />
-                      Checking Codex login...
-                    </>
-                  ) : (
-                    <>
-                      <RefreshCw size={15} strokeWidth={2} />
-                      Refresh Codex Status
-                    </>
-                  )}
-                </button>
-                <p className="text-xs text-on-surface-variant mt-3">
-                  If Codex is already signed in, this page should flip to connected immediately.
-                </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => void handleValidateAndSave()}
+                disabled={isValidating || isRefreshing}
+                className="btn-gradient text-on-primary px-5 py-2.5 rounded-sm text-sm font-semibold flex items-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                {isValidating ? (
+                  <>
+                    <Loader2 size={15} className="animate-spin" />
+                    Testing {getProviderLabel(candidateProvider)}...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={15} strokeWidth={2} />
+                    Validate and set as default
+                  </>
+                )}
+              </button>
+
+              {candidateProvider !== savedProvider && (
+                <span className="text-xs text-on-surface-variant">
+                  The saved default stays on {getProviderLabel(savedProvider)} until this test passes.
+                </span>
+              )}
+            </div>
+
+            {validationResult && (
+              <div className={`rounded-lg px-4 py-3 text-sm ${
+                validationResult.ok
+                  ? 'bg-emerald-50 text-emerald-800'
+                  : 'bg-rose-50 text-rose-800'
+              }`}>
+                <p className="font-medium">{validationResult.message}</p>
+                {(validationResult.model || validationResult.response) && (
+                  <p className="mt-1 text-xs opacity-80">
+                    {validationResult.model && <>Model: {validationResult.model}. </>}
+                    {validationResult.response && <>Probe response: {validationResult.response}</>}
+                  </p>
+                )}
               </div>
             )}
           </div>
