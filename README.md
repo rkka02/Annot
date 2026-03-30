@@ -17,11 +17,11 @@ Annot uses your existing local Codex or Claude Code login on the same machine. N
 
 ### PDF reading + chat
 
-![Annot workspace](./screenshots/1.png)
+![Annot workspace](./screenshots/1.png?v=f3dcb3f)
 
 ### Settings
 
-![Annot settings](./screenshots/3.png)
+![Annot settings](./screenshots/3.png?v=f3dcb3f)
 
 ## What It Does
 
