@@ -2,6 +2,8 @@
 
 Annot is a local-first PDF reading workspace with a built-in AI chat panel.
 
+It now supports both macOS and Windows development/runtime workflows.
+
 It is designed for a simple loop:
 
 1. organize papers in folders
@@ -23,7 +25,7 @@ Annot uses your existing local Codex or Claude Code login on the same machine. N
 
 ## What It Does
 
-- Real filesystem-backed workspace rooted at `~/Annot` by default
+- Real filesystem-backed workspace rooted at your home directory's `Annot` folder by default
 - Folder tree with create, rename, move, and delete actions
 - Real PDF rendering with vertical scroll mode and page mode
 - Text selection, PDF highlights, and eraser mode inside the PDF viewer
@@ -54,6 +56,14 @@ For example:
 python3 -m pip install --user pymupdf pdfplumber pypdf reportlab
 brew install poppler
 ```
+
+On Windows PowerShell:
+
+```powershell
+py -3 -m pip install --user pymupdf pdfplumber pypdf reportlab
+```
+
+If you need Poppler on Windows too, install a Windows build and make sure its `bin` directory is on `PATH`.
 
 ## Quick Start
 
@@ -89,12 +99,22 @@ If this is your first time opening Annot:
 8. Open a PDF and start reading.
 9. Ask your first question in the chat panel.
 
-Annot creates its workspace under `~/Annot` by default.
+Annot creates its workspace under your home directory by default:
+
+- macOS/Linux: `~/Annot`
+- Windows: `%USERPROFILE%\Annot`
 
 If you want to use a different root directory, start the app with:
 
 ```bash
 ANNOT_ROOT=/your/path npm run dev
+```
+
+On Windows PowerShell, the equivalent is:
+
+```powershell
+$env:ANNOT_ROOT = 'C:\path\to\Annot'
+npm run dev
 ```
 
 ## How Sessions Work
@@ -138,6 +158,7 @@ Annot restores the right session for the current folder or PDF so you can contin
 
 - Annot is designed to work with your local Codex or Claude Code authentication state.
 - The app reads and manages files locally.
+- On Windows, Annot will automatically look for `codex`, `codex.exe`, `claude`, `claude.exe`, `python`, and `py`.
 - The default provider is configured in `Settings` and only saved after a live validation check succeeds.
 - Existing sessions stay on the provider they were created with.
 - PDF highlights are written back into the original PDF file.

@@ -1,9 +1,14 @@
 import { spawn } from 'child_process';
-import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 
 import { getWorkspaceRoot } from '@/lib/annot-sessions';
+import {
+  buildExecutableCandidates,
+  finalizeResolvedCommand,
+  ResolvedCommand,
+  resolveExecutable,
+} from '@/lib/command-runtime';
 
 export interface ExecResult {
   codexSessionId: string;
@@ -53,7 +58,7 @@ interface ParsedEvent {
   message?: string;
 }
 
-let resolvedCodexExecutablePromise: Promise<string> | null = null;
+let resolvedCodexExecutablePromise: Promise<ResolvedCommand> | null = null;
 
 function buildPrompt({
   folderPath,
@@ -85,52 +90,32 @@ function buildPrompt({
   return contextLines.join('\n');
 }
 
-function getPathDirectories(): string[] {
-  const rawPath = process.env.PATH || '';
-  return rawPath
-    .split(path.delimiter)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 function getCodexExecutableCandidates(): string[] {
   const home = os.homedir();
-  const executableName = process.platform === 'win32' ? 'codex.cmd' : 'codex';
   const envCandidates = [
     process.env.CODEX_BIN,
     process.env.CODEX_PATH,
-  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
-
-  const pathCandidates = getPathDirectories().map((dirPath) => path.join(dirPath, executableName));
-  const commonCandidates = [
-    path.join(home, '.npm-global', 'bin', executableName),
-    path.join(home, '.local', 'bin', executableName),
-    path.join(home, '.bun', 'bin', executableName),
-    path.join(home, '.codex', 'bin', executableName),
-    path.join('/Applications', 'Codex.app', 'Contents', 'Resources', executableName),
-    path.join('/opt/homebrew/bin', executableName),
-    path.join('/usr/local/bin', executableName),
   ];
 
-  return [...new Set([...envCandidates, ...pathCandidates, ...commonCandidates])];
+  return buildExecutableCandidates(envCandidates, 'codex', [
+    path.join(home, '.npm-global', 'bin', 'codex'),
+    path.join(home, '.local', 'bin', 'codex'),
+    path.join(home, '.bun', 'bin', 'codex'),
+    path.join(home, '.codex', 'bin', 'codex'),
+    path.join(home, 'AppData', 'Roaming', 'npm', 'codex'),
+    path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'codex'),
+    path.join('/Applications', 'Codex.app', 'Contents', 'Resources', 'codex'),
+    path.join('/opt/homebrew/bin', 'codex'),
+    path.join('/usr/local/bin', 'codex'),
+  ]);
 }
 
-async function canExecute(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveCodexExecutable(): Promise<string> {
+async function resolveCodexExecutable(): Promise<ResolvedCommand> {
   const candidates = getCodexExecutableCandidates();
+  const executable = await resolveExecutable(candidates);
 
-  for (const candidate of candidates) {
-    if (await canExecute(candidate)) {
-      return candidate;
-    }
+  if (executable) {
+    return finalizeResolvedCommand(executable);
   }
 
   const searchedPaths = candidates.slice(0, 12).join(', ');
@@ -281,7 +266,7 @@ export async function runCodexTurn(input: RunTurnInput, options: RunTurnOptions 
   const args = createCodexArgs(input);
 
   return new Promise<ExecResult>((resolve, reject) => {
-    const child = spawn(codexExecutable, args, {
+    const child = spawn(codexExecutable.command, [...codexExecutable.argsPrefix, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
     });

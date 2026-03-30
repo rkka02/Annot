@@ -1,9 +1,14 @@
 import { spawn } from 'child_process';
-import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 
 import { getWorkspaceRoot } from '@/lib/annot-sessions';
+import {
+  buildExecutableCandidates,
+  finalizeResolvedCommand,
+  ResolvedCommand,
+  resolveExecutable,
+} from '@/lib/command-runtime';
 
 export interface ClaudeCodeAuthStatus {
   authenticated: boolean;
@@ -79,7 +84,7 @@ interface ClaudeCommandResult {
   content: string;
 }
 
-let resolvedClaudeExecutablePromise: Promise<string> | null = null;
+let resolvedClaudeExecutablePromise: Promise<ResolvedCommand> | null = null;
 
 function buildPrompt({
   folderPath,
@@ -111,50 +116,29 @@ function buildPrompt({
   return contextLines.join('\n');
 }
 
-function getPathDirectories(): string[] {
-  const rawPath = process.env.PATH || '';
-  return rawPath
-    .split(path.delimiter)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 function getClaudeExecutableCandidates(): string[] {
   const home = os.homedir();
-  const executableName = process.platform === 'win32' ? 'claude.cmd' : 'claude';
   const envCandidates = [
     process.env.CLAUDE_CODE_BIN,
     process.env.CLAUDE_BIN,
-  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
-
-  const pathCandidates = getPathDirectories().map((dirPath) => path.join(dirPath, executableName));
-  const commonCandidates = [
-    path.join(home, '.npm-global', 'bin', executableName),
-    path.join(home, '.local', 'bin', executableName),
-    path.join(home, '.claude', 'bin', executableName),
-    path.join('/opt/homebrew/bin', executableName),
-    path.join('/usr/local/bin', executableName),
   ];
 
-  return [...new Set([...envCandidates, ...pathCandidates, ...commonCandidates])];
+  return buildExecutableCandidates(envCandidates, 'claude', [
+    path.join(home, '.npm-global', 'bin', 'claude'),
+    path.join(home, '.local', 'bin', 'claude'),
+    path.join(home, '.claude', 'bin', 'claude'),
+    path.join(home, 'AppData', 'Roaming', 'npm', 'claude'),
+    path.join('/opt/homebrew/bin', 'claude'),
+    path.join('/usr/local/bin', 'claude'),
+  ]);
 }
 
-async function canExecute(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveClaudeExecutable(): Promise<string> {
+async function resolveClaudeExecutable(): Promise<ResolvedCommand> {
   const candidates = getClaudeExecutableCandidates();
+  const executable = await resolveExecutable(candidates);
 
-  for (const candidate of candidates) {
-    if (await canExecute(candidate)) {
-      return candidate;
-    }
+  if (executable) {
+    return finalizeResolvedCommand(executable);
   }
 
   const searchedPaths = candidates.slice(0, 12).join(', ');
@@ -244,7 +228,7 @@ async function executeClaudeCommand(
   const claudeExecutable = await resolvedClaudeExecutablePromise;
 
   return new Promise<ClaudeCommandResult>((resolve, reject) => {
-    const child = spawn(claudeExecutable, args, {
+    const child = spawn(claudeExecutable.command, [...claudeExecutable.argsPrefix, ...args], {
       cwd: getWorkspaceRoot(),
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
@@ -381,7 +365,7 @@ export async function getClaudeAuthStatus(): Promise<ClaudeCodeAuthStatus> {
   const claudeExecutable = await resolvedClaudeExecutablePromise;
 
   return await new Promise<ClaudeCodeAuthStatus>((resolve) => {
-    const child = spawn(claudeExecutable, ['auth', 'status', '--json'], {
+    const child = spawn(claudeExecutable.command, [...claudeExecutable.argsPrefix, 'auth', 'status', '--json'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
     });

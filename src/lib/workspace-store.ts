@@ -4,7 +4,7 @@ import { createContext, useContext } from 'react';
 import { Session, SessionKind, TreeNode } from '@/types';
 
 export interface WorkspaceState {
-  // Current workspace tree rooted at ~/Annot
+  // Current workspace tree rooted at the user's home Annot folder
   treeRoot: TreeNode | null;
   // Whether the tree is being loaded from disk
   treeLoading: boolean;
