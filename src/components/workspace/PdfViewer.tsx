@@ -79,6 +79,7 @@ export function PdfViewer() {
   const [selectedHighlightKey, setSelectedHighlightKey] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState('');
   const [noteSaving, setNoteSaving] = useState(false);
+  const [noteDialogOpen, setNoteDialogOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportMarkdown, setExportMarkdown] = useState('');
@@ -214,12 +215,14 @@ export function PdfViewer() {
   useEffect(() => {
     if (!selectedHighlightKey) {
       setDraftNote('');
+      setNoteDialogOpen(false);
       return;
     }
 
     if (!selectedHighlight) {
       setSelectedHighlightKey(null);
       setDraftNote('');
+      setNoteDialogOpen(false);
       return;
     }
 
@@ -483,6 +486,7 @@ export function PdfViewer() {
     }
 
     setSelectedHighlightKey(highlight.annotationId || highlight.id);
+    setNoteDialogOpen(true);
     setSelectionNotice(null);
   };
 
@@ -806,62 +810,6 @@ export function PdfViewer() {
             <h1 className="text-lg font-semibold text-on-surface truncate">
               {activePdf.name}
             </h1>
-            {selectedHighlight && (
-              <div className="mt-4 rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-4 shadow-ambient">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="text-[10px] uppercase tracking-widest text-on-surface-variant font-medium">
-                      {selectedHighlight.type === 'important' ? 'Yellow' : 'Red'} highlight · Page {selectedHighlight.page}
-                    </div>
-                    <p className="mt-1 text-sm text-on-surface whitespace-pre-wrap break-words">
-                      {selectedHighlight.text}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setSelectedHighlightKey(null)}
-                    className="shrink-0 rounded-md px-2 py-1 text-[11px] text-on-surface-variant hover:bg-surface-container-high transition-colors"
-                  >
-                    Close
-                  </button>
-                </div>
-                <div className="mt-3">
-                  <label className="mb-1 block text-[11px] font-medium text-on-surface-variant">
-                    Memo
-                  </label>
-                  <textarea
-                    value={draftNote}
-                    onChange={(event) => setDraftNote(event.target.value)}
-                    disabled={!selectedHighlight.annotationId || noteSaving}
-                    placeholder="Add a memo for this highlight..."
-                    className="min-h-24 w-full rounded-lg border border-outline-variant/30 bg-surface px-3 py-2 text-sm text-on-surface outline-none transition-colors focus:border-outline disabled:cursor-not-allowed disabled:opacity-60"
-                  />
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <p className="text-[11px] text-on-surface-variant">
-                      {selectedHighlight.annotationId
-                        ? 'Memo is stored with the PDF annotation.'
-                        : 'Memo editing is unavailable until annotation sync succeeds.'}
-                    </p>
-                    <button
-                      onClick={() => void handleSaveNote()}
-                      disabled={
-                        !selectedHighlight.annotationId ||
-                        noteSaving ||
-                        annotationSyncing ||
-                        draftNote === (selectedHighlight.note ?? '')
-                      }
-                      className="inline-flex items-center gap-2 rounded-md bg-on-surface px-3 py-1.5 text-[11px] font-semibold text-surface-container-lowest transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {noteSaving ? (
-                        <Loader2 size={12} className="animate-spin" />
-                      ) : (
-                        <Save size={12} strokeWidth={2} />
-                      )}
-                      {noteSaving ? 'Saving...' : 'Save memo'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
             <div className="mt-2 flex items-center gap-2 text-[11px] text-on-surface-variant">
               {eraseMode ? (
                 <span>Erase mode is on. Select text over highlighted content to remove those PDF highlights.</span>
@@ -870,7 +818,7 @@ export function PdfViewer() {
                   {highlightMode === 'important' ? 'Important' : 'Unknown'} highlight mode is on. Select text on the page to save a PDF highlight.
                 </span>
               ) : selectedHighlight ? (
-                <span>Highlight selected. Add or edit a memo below.</span>
+                <span>Highlight selected. Add or edit a memo in the popup.</span>
               ) : (
                 <span>Selectable text can be dragged directly on PDFs that include a text layer. Click a highlight to add a memo.</span>
               )}
@@ -922,6 +870,82 @@ export function PdfViewer() {
         onCancel={() => setExportDialogOpen(false)}
         onConfirm={handleConfirmExport}
       />
+
+      {selectedHighlight && noteDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-6">
+          <div className="w-full max-w-2xl rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-ambient">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-on-surface">Highlight Memo</div>
+                <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+                  {selectedHighlight.type === 'important' ? 'Yellow' : 'Red'} highlight · Page {selectedHighlight.page}
+                </p>
+              </div>
+              <button
+                onClick={() => setNoteDialogOpen(false)}
+                className="shrink-0 rounded-lg p-1 text-on-surface-variant transition-colors hover:bg-surface-container-high"
+              >
+                <X size={14} strokeWidth={2} />
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-xl bg-surface-container px-4 py-3">
+              <div className="text-[11px] font-medium uppercase tracking-widest text-on-surface-variant">
+                Highlight Text
+              </div>
+              <p className="mt-2 whitespace-pre-wrap break-words text-sm text-on-surface">
+                {selectedHighlight.text}
+              </p>
+            </div>
+
+            <div className="mt-4">
+              <label className="mb-1 block text-[11px] font-medium text-on-surface-variant">
+                Memo
+              </label>
+              <textarea
+                value={draftNote}
+                onChange={(event) => setDraftNote(event.target.value)}
+                disabled={!selectedHighlight.annotationId || noteSaving}
+                placeholder="Add a memo for this highlight..."
+                className="min-h-32 w-full rounded-lg border border-outline-variant/30 bg-surface px-3 py-2 text-sm text-on-surface outline-none transition-colors focus:border-outline disabled:cursor-not-allowed disabled:opacity-60"
+              />
+            </div>
+
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <p className="text-[11px] text-on-surface-variant">
+                {selectedHighlight.annotationId
+                  ? 'Memo is stored with the PDF annotation.'
+                  : 'Memo editing is unavailable until annotation sync succeeds.'}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setNoteDialogOpen(false)}
+                  className="rounded-xl px-3 py-2 text-xs font-medium text-on-surface-variant transition-colors hover:bg-surface-container-high"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() => void handleSaveNote()}
+                  disabled={
+                    !selectedHighlight.annotationId ||
+                    noteSaving ||
+                    annotationSyncing ||
+                    draftNote === (selectedHighlight.note ?? '')
+                  }
+                  className="inline-flex items-center gap-2 rounded-xl bg-on-surface px-3 py-2 text-xs font-semibold text-surface-container-lowest transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {noteSaving ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <Save size={12} strokeWidth={2} />
+                  )}
+                  {noteSaving ? 'Saving...' : 'Save memo'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

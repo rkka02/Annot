@@ -128,15 +128,25 @@ body {
   position: relative;
 }
 
+.pdf-page-shell .react-pdf__Page {
+  position: relative;
+}
+
+.pdf-page-shell canvas {
+  display: block;
+}
+
 .pdf-page-shell .react-pdf__Page__textContent {
   user-select: text;
   cursor: text;
+  z-index: 2;
 }
 
 .pdf-highlight-layer {
   pointer-events: none;
   position: absolute;
   inset: 0;
+  z-index: 3;
 }
 
 .pdf-highlight-layer--interactive {
@@ -149,6 +159,7 @@ body {
   mix-blend-mode: multiply;
   border: 0;
   padding: 0;
+  z-index: 4;
 }
 
 .pdf-highlight-box--interactive {
