@@ -147,15 +147,21 @@ body {
   position: absolute;
   border-radius: 2px;
   mix-blend-mode: multiply;
+  border: 0;
+  padding: 0;
 }
 
-.pdf-highlight-box--erasable {
+.pdf-highlight-box--interactive {
   cursor: pointer;
   pointer-events: auto;
 }
 
-.pdf-highlight-box--erasable:hover {
+.pdf-highlight-box--interactive:hover {
   outline: 1px solid rgba(40, 52, 57, 0.28);
+}
+
+.pdf-highlight-box--selected {
+  outline: 2px solid rgba(40, 52, 57, 0.45);
 }
 
 .pdf-highlight-box--important {

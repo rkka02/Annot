@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 
 import { buildExecutableCandidates, resolveExecutable } from '@/lib/command-runtime';
+import { mergeHighlights, normalizeHighlightRects } from '@/lib/highlight-utils';
 import { resolveFolderPath } from '@/lib/annot-sessions';
 import { Highlight } from '@/types';
 
@@ -11,6 +12,14 @@ export interface PdfHighlightPayload {
   type: Highlight['type'];
   text: string;
   rects: Highlight['rects'];
+  note?: string;
+}
+
+export interface PdfHighlightUpdatePayload {
+  annotationId: string;
+  text?: string;
+  note?: string;
+  type?: Highlight['type'];
 }
 
 export interface PdfHighlight extends Highlight {
@@ -22,9 +31,10 @@ interface PdfAnnotationResponse {
   migrated?: number;
   added?: number;
   deleted?: number;
+  updated?: number;
 }
 
-type PdfAnnotationAction = 'list' | 'upsert' | 'delete';
+type PdfAnnotationAction = 'list' | 'upsert' | 'delete' | 'update';
 
 interface ResolvedPythonCommand {
   command: string;
@@ -43,6 +53,7 @@ import fitz
 IMPORTANT_COLOR = (0.9882352941, 0.6980392157, 0.3490196078)
 UNKNOWN_COLOR = (0.9960784314, 0.5372549020, 0.5137254902)
 RECT_TOLERANCE = 0.003
+ANNOT_PAYLOAD_VERSION = "annot-v1"
 
 
 def approx(a, b, tol=RECT_TOLERANCE):
@@ -97,9 +108,46 @@ def infer_type(annot):
     return "important"
 
 
+def decode_content(info):
+    raw_content = (info.get("content") or "").strip()
+    if not raw_content:
+        return {
+            "text": "",
+            "note": "",
+        }
+
+    try:
+        payload = json.loads(raw_content)
+        if payload.get("annot") == ANNOT_PAYLOAD_VERSION:
+            return {
+                "text": str(payload.get("text") or ""),
+                "note": str(payload.get("note") or ""),
+            }
+    except Exception:
+        pass
+
+    return {
+        "text": raw_content,
+        "note": "",
+    }
+
+
+def encode_content(text, note):
+    return json.dumps({
+        "annot": ANNOT_PAYLOAD_VERSION,
+        "text": text or "",
+        "note": note or "",
+    }, ensure_ascii=False, separators=(",", ":"))
+
+
 def extract_text(annot):
     info = annot.info or {}
-    return (info.get("content") or "").strip()
+    return decode_content(info)["text"]
+
+
+def extract_note(annot):
+    info = annot.info or {}
+    return decode_content(info)["note"]
 
 
 def export_annotation(page_number, annot, page_rect):
@@ -119,6 +167,7 @@ def export_annotation(page_number, annot, page_rect):
         "page": int(page_number),
         "type": infer_type(annot),
         "text": extract_text(annot),
+        "note": extract_note(annot),
         "rects": rects,
         "position": rects[0],
     }
@@ -197,6 +246,7 @@ try:
                 "page": int(item["page"]),
                 "type": item.get("type", "important"),
                 "text": item.get("text", ""),
+                "note": item.get("note", ""),
                 "rects": [normalize_rect(rect) for rect in item.get("rects", []) if rect is not None],
             }
 
@@ -211,7 +261,11 @@ try:
             annotation = page.add_highlight_annot(quads)
             color = UNKNOWN_COLOR if candidate["type"] == "unknown" else IMPORTANT_COLOR
             annotation.set_colors(stroke=color)
-            annotation.set_info(title="Annot", subject=candidate["type"], content=candidate["text"])
+            annotation.set_info(
+                title="Annot",
+                subject=candidate["type"],
+                content=encode_content(candidate["text"], candidate["note"]),
+            )
             annotation.update()
             added += 1
 
@@ -244,6 +298,57 @@ try:
         result = {
             "highlights": collect_annotations(doc),
             "deleted": deleted,
+        }
+    elif action == "update":
+        updated = 0
+        updates = {}
+
+        for item in payload.get("updates", []):
+            annotation_id = item.get("annotationId")
+            if annotation_id is None:
+                continue
+
+            try:
+                updates[int(annotation_id)] = item
+            except Exception:
+                continue
+
+        if updates:
+            for page_index in range(doc.page_count):
+                page = doc[page_index]
+                annot = page.first_annot
+                while annot:
+                    target = updates.get(annot.xref)
+                    if target is not None:
+                        current_type = infer_type(annot)
+                        current_payload = decode_content(annot.info or {})
+                        next_type = target.get("type", current_type) or current_type
+                        next_text = target.get("text", current_payload.get("text", "")) or ""
+                        next_note = target.get("note", current_payload.get("note", "")) or ""
+
+                        if (
+                            next_type != current_type or
+                            next_text != current_payload.get("text", "") or
+                            next_note != current_payload.get("note", "")
+                        ):
+                            color = UNKNOWN_COLOR if next_type == "unknown" else IMPORTANT_COLOR
+                            annot.set_colors(stroke=color)
+                            annot.set_info(
+                                title="Annot",
+                                subject=next_type,
+                                content=encode_content(next_text, next_note),
+                            )
+                            annot.update()
+                            updated += 1
+
+                    annot = annot.next
+
+            if updated > 0:
+                doc = save_document(doc, pdf_path)
+
+        result = {
+            "highlights": collect_annotations(doc),
+            "updated": updated,
         }
     else:
         raise ValueError(f"Unsupported action: {action}")
@@ -374,9 +479,16 @@ function runPdfAnnotationScript(payload: Record<string, unknown>): Promise<PdfAn
 }
 
 function normalizeReturnedHighlights(pdfPath: string, highlights: PdfHighlight[]): PdfHighlight[] {
-  return highlights.map((highlight) => ({
-    ...highlight,
-    pdfPath,
+  return mergeHighlights(highlights.map((highlight) => {
+    const rects = normalizeHighlightRects(highlight.rects?.length ? highlight.rects : [highlight.position]);
+
+    return {
+      ...highlight,
+      pdfPath,
+      note: typeof highlight.note === 'string' ? highlight.note : '',
+      rects,
+      position: rects[0] ?? highlight.position,
+    };
   }));
 }
 
@@ -409,9 +521,85 @@ export async function savePdfAnnotations(
   return runPdfAnnotationAction('upsert', pdfPath, { highlights });
 }
 
+export async function updatePdfAnnotations(
+  pdfPath: string,
+  updates: PdfHighlightUpdatePayload[],
+): Promise<PdfAnnotationResponse> {
+  return runPdfAnnotationAction('update', pdfPath, { updates });
+}
+
 export async function deletePdfAnnotations(
   pdfPath: string,
   annotationIds: string[],
 ): Promise<PdfAnnotationResponse> {
   return runPdfAnnotationAction('delete', pdfPath, { annotationIds });
+}
+
+function escapeMarkdownBlock(value: string): string {
+  return value
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.replace(/^>/, '\\>'))
+    .join('\n');
+}
+
+function compareHighlights(a: PdfHighlight, b: PdfHighlight): number {
+  if (a.page !== b.page) {
+    return a.page - b.page;
+  }
+
+  const aRect = a.rects?.[0] ?? a.position;
+  const bRect = b.rects?.[0] ?? b.position;
+  if (Math.abs(aRect.y - bRect.y) > 0.0005) {
+    return aRect.y - bRect.y;
+  }
+
+  return aRect.x - bRect.x;
+}
+
+function formatSection(
+  title: string,
+  highlights: PdfHighlight[],
+): string[] {
+  if (highlights.length === 0) {
+    return [`## ${title}`, '', 'None.', ''];
+  }
+
+  const lines = [`## ${title}`, ''];
+
+  highlights.forEach((highlight, index) => {
+    lines.push(`### ${index + 1}. Page ${highlight.page}`);
+    lines.push('');
+    lines.push(`> ${escapeMarkdownBlock(highlight.text)}`);
+
+    if (highlight.note?.trim()) {
+      lines.push('');
+      lines.push(`Memo: ${highlight.note.trim()}`);
+    }
+
+    lines.push('');
+  });
+
+  return lines;
+}
+
+export function buildPdfHighlightsMarkdown(pdfPath: string, highlights: PdfHighlight[]): string {
+  const normalizedHighlights = mergeHighlights(highlights).sort(compareHighlights);
+  const yellowHighlights = normalizedHighlights.filter((highlight) => highlight.type === 'important');
+  const redHighlights = normalizedHighlights.filter((highlight) => highlight.type === 'unknown');
+  const title = path.basename(pdfPath).replace(/\.pdf$/i, '');
+
+  return [
+    `# ${title} Highlights`,
+    '',
+    `Source PDF: \`${pdfPath}\``,
+    `Generated: ${new Date().toISOString()}`,
+    '',
+    ...formatSection('Yellow Highlights', yellowHighlights),
+    ...formatSection('Red Highlights', redHighlights),
+  ].join('\n').trimEnd() + '\n';
+}
+
+export function getPdfHighlightsMarkdownFileName(pdfPath: string): string {
+  return `${path.basename(pdfPath).replace(/\.pdf$/i, '')}.highlights.md`;
 }
