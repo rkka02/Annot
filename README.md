@@ -21,11 +21,11 @@ Annot uses your existing local Codex or Claude Code login on the same machine. N
 
 ### Highlight markdown export preview
 
-![Highlight markdown preview](./screenshots/highlight-markdown.png)
+![Highlight markdown preview](https://raw.githubusercontent.com/rkka02/Annot/codex/highlight-summary-export/screenshots/highlight-markdown.png)
 
 ### LLM summary markdown export preview
 
-![LLM summary markdown preview](./screenshots/llm-markdown.png)
+![LLM summary markdown preview](https://raw.githubusercontent.com/rkka02/Annot/codex/highlight-summary-export/screenshots/llm-markdown.png)
 
 ### Settings
 
