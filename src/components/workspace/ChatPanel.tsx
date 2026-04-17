@@ -1,15 +1,17 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, BookOpen, Link2, Sparkles, Loader2, ChevronDown, X } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Send, BookOpen, Link2, Sparkles, Loader2, ChevronDown, X, CheckCircle2, AlertCircle, FileDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
+import { MarkdownPreviewDialog } from '@/components/common/MarkdownPreviewDialog';
+import { buildSessionSummaryMarkdown, getSessionSummaryMarkdownFileName } from '@/lib/session-summary-markdown';
 import { useWorkspace } from '@/lib/workspace-store';
 import { AI_PROVIDER_EVENT, readStoredAIProvider } from '@/lib/provider-preferences';
-import { AIProvider, ChatMessage, Session, SessionKind } from '@/types';
+import { AIProvider, ChatMessage, Session, SessionKind, SessionTurnSummary } from '@/types';
 import {
   CHAT_FONT_SIZE_EVENT,
   DEFAULT_CHAT_FONT_SIZE,
@@ -70,14 +72,20 @@ type ChatStreamEvent =
   | FinalEvent
   | ErrorEvent;
 
+type SummaryStatus = 'idle' | 'generating' | 'saved' | 'error';
+
 interface SessionUiState {
   isLoading: boolean;
   sessionLoading: boolean;
   thinkingOpen: boolean;
   thinkingDraft: string;
   messages: ChatMessage[];
+  turnSummaries: SessionTurnSummary[];
+  summaryStatus: SummaryStatus;
+  summaryStatusMessage: string;
   provider: AIProvider;
   selectedModel?: string;
+  title?: string;
 }
 
 function normalizeMathMarkdown(content: string): string {
@@ -93,6 +101,9 @@ function createDefaultSessionUiState(): SessionUiState {
     thinkingOpen: false,
     thinkingDraft: '',
     messages: [],
+    turnSummaries: [],
+    summaryStatus: 'idle',
+    summaryStatusMessage: '',
     provider: DEFAULT_AI_PROVIDER,
   };
 }
@@ -119,6 +130,11 @@ export function ChatPanel() {
   const [modelsLoading, setModelsLoading] = useState(true);
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const [thinkingDraft, setThinkingDraft] = useState('');
+  const [turnSummaries, setTurnSummaries] = useState<SessionTurnSummary[]>([]);
+  const [summaryStatus, setSummaryStatus] = useState<SummaryStatus>('idle');
+  const [summaryStatusMessage, setSummaryStatusMessage] = useState('');
+  const [sessionTitle, setSessionTitle] = useState('');
+  const [summaryExportOpen, setSummaryExportOpen] = useState(false);
   const [chatFontSize, setChatFontSize] = useState(DEFAULT_CHAT_FONT_SIZE);
   const pickerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -128,6 +144,58 @@ export function ChatPanel() {
   const sessionUiMapRef = useRef<Record<string, SessionUiState>>({});
 
   const sessionLabel = activeSessionKind === 'pdf' ? 'PDF Session' : 'Folder Session';
+  const exportSession = useMemo<Session>(() => ({
+    id: activeSessionId || 'preview-session',
+    folderPath: activeSessionFolder || '',
+    sessionKind: activeSessionKind || 'folder',
+    pdfPath: activeSessionKind === 'pdf' ? (activeSessionPdfPath || activePdf?.path || undefined) : undefined,
+    provider: selectedProvider,
+    title: sessionTitle || (
+      activeSessionKind === 'pdf'
+        ? `${(activePdf?.name || activeSessionPdfPath?.split('/').at(-1) || 'PDF').replace(/\.pdf$/i, '')} session`
+        : `${activeSessionFolder?.split('/').filter(Boolean).at(-1) || 'Workspace'} session`
+    ),
+    createdAt: '',
+    updatedAt: '',
+    messages,
+    turnSummaries,
+    model: selectedModel || undefined,
+  }), [
+    activePdf,
+    activeSessionFolder,
+    activeSessionId,
+    activeSessionKind,
+    activeSessionPdfPath,
+    messages,
+    selectedModel,
+    selectedProvider,
+    sessionTitle,
+    turnSummaries,
+  ]);
+  const summaryMarkdown = useMemo(
+    () => buildSessionSummaryMarkdown(exportSession),
+    [exportSession],
+  );
+  const summaryMarkdownFileName = useMemo(
+    () => getSessionSummaryMarkdownFileName(exportSession),
+    [exportSession],
+  );
+  const exportableTurnCount = useMemo(() => {
+    let count = 0;
+
+    for (let index = 0; index < messages.length; index += 1) {
+      if (messages[index]?.role !== 'user') {
+        continue;
+      }
+
+      const hasAssistantReply = messages.slice(index + 1).some((message) => message.role === 'assistant');
+      if (hasAssistantReply) {
+        count += 1;
+      }
+    }
+
+    return count;
+  }, [messages]);
   const buildSessionQuery = (
     folderPath: string,
     sessionKind: SessionKind,
@@ -172,7 +240,11 @@ export function ChatPanel() {
     setSessionLoading(state.sessionLoading);
     setThinkingOpen(state.thinkingOpen);
     setThinkingDraft(state.thinkingDraft);
+    setTurnSummaries(state.turnSummaries);
+    setSummaryStatus(state.summaryStatus);
+    setSummaryStatusMessage(state.summaryStatusMessage);
     setSelectedProvider(state.provider);
+    setSessionTitle(state.title || '');
     if (state.selectedModel) {
       setSelectedModel(state.selectedModel);
     }
@@ -184,6 +256,10 @@ export function ChatPanel() {
     setSessionLoading(false);
     setThinkingOpen(false);
     setThinkingDraft('');
+    setTurnSummaries([]);
+    setSummaryStatus('idle');
+    setSummaryStatusMessage('');
+    setSessionTitle('');
     setSelectedProvider(readStoredAIProvider());
   }, []);
 
@@ -320,9 +396,13 @@ export function ChatPanel() {
           commitSessionUiState(activeSessionId, (current) => ({
             ...current,
             messages: Array.isArray(data.messages) ? data.messages : [],
+            turnSummaries: Array.isArray(data.turnSummaries) ? data.turnSummaries : [],
+            summaryStatus: 'idle',
+            summaryStatusMessage: '',
             provider: data.provider || current.provider || readStoredAIProvider() || DEFAULT_AI_PROVIDER,
             sessionLoading: false,
             selectedModel: typeof data.model === 'string' && data.model ? data.model : current.selectedModel,
+            title: typeof data.title === 'string' ? data.title : current.title,
           }));
         }
       } catch {
@@ -330,6 +410,9 @@ export function ChatPanel() {
           commitSessionUiState(activeSessionId, (current) => ({
             ...current,
             messages: [],
+            turnSummaries: [],
+            summaryStatus: 'idle',
+            summaryStatusMessage: '',
             sessionLoading: false,
           }));
         }
@@ -559,25 +642,32 @@ export function ChatPanel() {
     if (event.type === 'final') {
       const currentUiState = sessionUiMapRef.current[sessionId] ?? createDefaultSessionUiState();
       const finalContent = stripThinkingOverlap(event.content || '', currentUiState.thinkingDraft);
-
-      commitSessionUiState(sessionId, (current) => ({
-        ...current,
-        messages: [
+      const sessionMessages = Array.isArray(event.session?.messages)
+        ? event.session!.messages
+        : [
           ...updatedMessages,
           {
             id: `c${Date.now()}`,
-            role: 'assistant',
+            role: 'assistant' as const,
             content: finalContent,
             timestamp: new Date().toISOString(),
             model: event.model || fallbackModel,
           },
-        ],
+        ];
+
+      commitSessionUiState(sessionId, (current) => ({
+        ...current,
+        messages: sessionMessages,
+        turnSummaries: current.turnSummaries,
         isLoading: false,
         sessionLoading: false,
         thinkingDraft: '',
         thinkingOpen: false,
+        summaryStatus: 'idle',
+        summaryStatusMessage: '',
         selectedModel: event.model || fallbackModel,
         provider: event.provider || current.provider,
+        title: event.session?.title || current.title,
       }));
       return;
     }
@@ -622,10 +712,13 @@ export function ChatPanel() {
       commitSessionUiState(sessionId, (current) => ({
         ...current,
         messages: updated,
+        turnSummaries: [],
         isLoading: true,
         sessionLoading: false,
         thinkingDraft: '',
         thinkingOpen: false,
+        summaryStatus: 'idle',
+        summaryStatusMessage: '',
         selectedModel: selectedModel || current.selectedModel,
       }));
 
@@ -734,6 +827,99 @@ export function ChatPanel() {
     }));
   };
 
+  const handleSummaryExport = async () => {
+    const blob = new Blob([summaryMarkdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = summaryMarkdownFileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setSummaryExportOpen(false);
+  };
+
+  const handleOpenSummaryExport = async () => {
+    if (!activeSessionId || !activeSessionFolder || exportableTurnCount === 0) {
+      return;
+    }
+
+    setSummaryExportOpen(true);
+    setSummaryStatus('generating');
+    setSummaryStatusMessage('Generating summaries from the full chat history...');
+
+    try {
+      const res = await fetch('/api/sessions/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderPath: activeSessionFolder,
+          sessionId: activeSessionId,
+          model: selectedModel || undefined,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || data?.error) {
+        throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to generate summary export.');
+      }
+
+      const nextSession = data.session as Session | undefined;
+      const nextSummaries = Array.isArray(nextSession?.turnSummaries) ? nextSession.turnSummaries : [];
+
+      setTurnSummaries(nextSummaries);
+      setSessionTitle(typeof nextSession?.title === 'string' ? nextSession.title : sessionTitle);
+
+      if (activeSessionId) {
+        commitSessionUiState(activeSessionId, (current) => ({
+          ...current,
+          turnSummaries: nextSummaries,
+          summaryStatus: 'saved',
+          summaryStatusMessage: 'Summary export is ready.',
+          title: typeof nextSession?.title === 'string' ? nextSession.title : current.title,
+        }));
+      } else {
+        setSummaryStatus('saved');
+        setSummaryStatusMessage('Summary export is ready.');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to generate summary export.';
+      setSummaryStatus('error');
+      setSummaryStatusMessage(message);
+      setSummaryExportOpen(false);
+    }
+  };
+
+  const renderSummaryStatus = () => {
+    if (summaryStatus === 'generating') {
+      return (
+        <div className="flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">
+          <Loader2 size={10} className="animate-spin" />
+          <span>{summaryStatusMessage || 'Summarizing'}</span>
+        </div>
+      );
+    }
+
+    if (summaryStatus === 'saved') {
+      return (
+        <div className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700">
+          <CheckCircle2 size={10} />
+          <span>{summaryStatusMessage || 'Summary saved'}</span>
+        </div>
+      );
+    }
+
+    if (summaryStatus === 'error') {
+      return (
+        <div className="flex items-center gap-1 rounded-full bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">
+          <AlertCircle size={10} />
+          <span>{summaryStatusMessage || 'Summary failed'}</span>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
   const assistantFontStyle = { fontSize: `${chatFontSize}px`, lineHeight: 1.7 };
   const userFontStyle = { fontSize: `${chatFontSize}px`, lineHeight: 1.7 };
   const inputFontStyle = { fontSize: `${chatFontSize}px`, lineHeight: 1.7 };
@@ -746,8 +932,18 @@ export function ChatPanel() {
       <div className="px-4 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <h2 className="text-xs font-bold uppercase tracking-wider text-on-surface-variant">{sessionLabel}</h2>
+          {renderSummaryStatus()}
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => void handleOpenSummaryExport()}
+            disabled={!activeSessionId || exportableTurnCount === 0 || summaryStatus === 'generating'}
+            className="flex items-center gap-1 rounded-md bg-surface-container px-2.5 py-1.5 text-[11px] font-medium text-on-surface-variant transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
+            title="Preview summary markdown"
+          >
+            <FileDown size={11} strokeWidth={2} />
+            Export
+          </button>
           {/* Model selector */}
           <div className="relative" ref={pickerRef}>
             <button
@@ -808,6 +1004,69 @@ export function ChatPanel() {
             </div>
             <span className="text-xs text-on-surface-variant mt-1">Loading session...</span>
           </div>
+        )}
+
+        {(exportableTurnCount > 0 || summaryStatus !== 'idle') && (
+          <section className="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest p-3 shadow-ambient">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+                  Turn Summaries
+                </div>
+                <p className="mt-1 text-[11px] text-on-surface-variant">
+                  Summaries are generated from the full chat history when you export.
+                </p>
+              </div>
+              <button
+                onClick={() => void handleOpenSummaryExport()}
+                disabled={!activeSessionId || exportableTurnCount === 0 || summaryStatus === 'generating'}
+                className="rounded-md bg-surface-container px-2 py-1 text-[10px] font-medium text-on-surface-variant transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Preview Markdown
+              </button>
+            </div>
+
+            {turnSummaries.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                {[...turnSummaries].reverse().map((summary, index) => (
+                  <div
+                    key={summary.id}
+                    className="rounded-xl bg-surface-container px-3 py-3"
+                  >
+                    <div className="mb-2 text-[10px] uppercase tracking-widest text-outline">
+                      Turn {turnSummaries.length - index}
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">
+                          Question
+                        </div>
+                        <p className="mt-1 text-xs text-on-surface whitespace-pre-wrap break-words">
+                          {summary.question}
+                        </p>
+                      </div>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">
+                          Answer Summary
+                        </div>
+                        <p className="mt-1 text-xs text-on-surface whitespace-pre-wrap break-words">
+                          {summary.answerSummary}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 rounded-xl bg-surface-container px-3 py-2 text-xs text-on-surface-variant">
+                {summaryStatus === 'generating'
+                  ? 'Summary is being generated for the latest turn.'
+                  : summaryStatus === 'error'
+                    ? (summaryStatusMessage || 'Summary generation failed.')
+                    : 'No saved summaries yet. Use Export to generate them from the full chat history.'}
+              </div>
+            )}
+          </section>
         )}
 
         {messages.map((msg) => (
@@ -955,6 +1214,18 @@ export function ChatPanel() {
           </button>
         </div>
       </div>
+
+      <MarkdownPreviewDialog
+        open={summaryExportOpen}
+        title="Preview Summary Markdown"
+        description="Review the export generated from the full chat history before downloading it."
+        fileName={summaryMarkdownFileName}
+        markdown={summaryMarkdown}
+        loading={summaryStatus === 'generating'}
+        confirmLabel="Download Markdown"
+        onCancel={() => setSummaryExportOpen(false)}
+        onConfirm={handleSummaryExport}
+      />
     </div>
   );
 }

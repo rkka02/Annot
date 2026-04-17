@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
               assistantMessage,
             );
 
-            const updatedSession = await updateSession(folderPath, sessionId, {
+            const messageSavedSession = await updateSession(folderPath, sessionId, {
               messages: nextMessages,
               provider: session.provider,
               providerSessionId: turn.providerSessionId,
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
               content: assistantMessage.content,
               model: assistantMessage.model,
               provider: session.provider,
-              session: updatedSession,
+              session: messageSavedSession,
             });
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Internal server error';

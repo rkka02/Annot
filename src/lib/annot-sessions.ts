@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 
 import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
-import { AIProvider, ChatMessage, Session, SessionKind } from '@/types';
+import { AIProvider, ChatMessage, Session, SessionKind, SessionTurnSummary } from '@/types';
 
 const WORKSPACE_ROOT = process.env.ANNOT_ROOT || path.join(os.homedir(), 'Annot');
 
@@ -162,6 +162,18 @@ function normalizeSession(folderPath: string, session: StoredSessionRecord): Sto
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     messages: Array.isArray(session.messages) ? session.messages : [],
+    turnSummaries: Array.isArray(session.turnSummaries)
+      ? session.turnSummaries.filter((summary): summary is SessionTurnSummary => (
+        typeof summary === 'object' &&
+        summary !== null &&
+        typeof summary.id === 'string' &&
+        typeof summary.questionMessageId === 'string' &&
+        typeof summary.assistantMessageId === 'string' &&
+        typeof summary.question === 'string' &&
+        typeof summary.answerSummary === 'string' &&
+        typeof summary.createdAt === 'string'
+      ))
+      : [],
     model: session.model,
   };
 }
@@ -266,6 +278,7 @@ async function writeSessions(folderPath: string, sessions: StoredSession[]): Pro
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     messages: session.messages,
+    turnSummaries: session.turnSummaries ?? [],
     model: session.model,
   }));
   await fs.writeFile(sessionsFile, JSON.stringify(cleanedSessions, null, 2));
@@ -344,6 +357,7 @@ export async function createSession(
     createdAt: now,
     updatedAt: now,
     messages: [],
+    turnSummaries: [],
     model: options.model,
   };
 
@@ -356,7 +370,7 @@ export async function createSession(
 export async function updateSession(
   folderPath: string,
   sessionId: string,
-  updates: Partial<Pick<StoredSession, 'messages' | 'title' | 'provider' | 'providerSessionId' | 'model'>>
+  updates: Partial<Pick<StoredSession, 'messages' | 'title' | 'provider' | 'providerSessionId' | 'model' | 'turnSummaries'>>
 ): Promise<StoredSession> {
   const sessions = await listSessions(folderPath);
   const index = sessions.findIndex((session) => session.id === sessionId);

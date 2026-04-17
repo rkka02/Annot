@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspace } from '@/lib/workspace-store';
 import { Highlight } from '@/types';
+import { getHighlightRects, mergeHighlights, normalizeHighlightRects, type HighlightRect } from '@/lib/highlight-utils';
+import { MarkdownPreviewDialog } from '@/components/common/MarkdownPreviewDialog';
 import {
   Minus,
   Plus,
@@ -12,9 +14,11 @@ import {
   Highlighter,
   Eraser,
   Download,
+  FileDown,
   X,
   MessageSquare,
   Loader2,
+  Save,
 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 
@@ -24,12 +28,6 @@ const HIGHLIGHTS_STORAGE_KEY = 'annot-pdf-highlights';
 
 type HighlightMode = Highlight['type'] | null;
 type PdfViewMode = 'paged' | 'scroll';
-type NormalizedHighlightRect = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
 
 function loadHighlights(): Record<string, Highlight[]> {
   if (typeof window === 'undefined') return {};
@@ -65,42 +63,6 @@ function setStoredHighlights(pdfPath: string, nextHighlights: Highlight[]): void
   saveHighlights(highlightStore);
 }
 
-function getHighlightRects(highlight: Highlight): NormalizedHighlightRect[] {
-  return highlight.rects?.length ? highlight.rects : [highlight.position];
-}
-
-function buildHighlightSignature(highlight: Highlight): string {
-  const rects = getHighlightRects(highlight)
-    .map((rect) => (
-      `${rect.x.toFixed(4)}:${rect.y.toFixed(4)}:${rect.width.toFixed(4)}:${rect.height.toFixed(4)}`
-    ))
-    .join('|');
-
-  return [
-    highlight.page,
-    highlight.type,
-    highlight.text.trim().toLowerCase(),
-    rects,
-  ].join('::');
-}
-
-function mergeHighlights(highlights: Highlight[]): Highlight[] {
-  const seen = new Set<string>();
-  const merged: Highlight[] = [];
-
-  for (const highlight of highlights) {
-    const signature = buildHighlightSignature(highlight);
-    if (seen.has(signature)) {
-      continue;
-    }
-
-    seen.add(signature);
-    merged.push(highlight);
-  }
-
-  return merged;
-}
-
 export function PdfViewer() {
   const { activePdf, closePdf, activeSessionFolder, chatOpen, toggleChat } = useWorkspace();
   const activePdfPath = activePdf?.path ?? '';
@@ -114,6 +76,12 @@ export function PdfViewer() {
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
   const [annotationSyncing, setAnnotationSyncing] = useState(false);
+  const [selectedHighlightKey, setSelectedHighlightKey] = useState<string | null>(null);
+  const [draftNote, setDraftNote] = useState('');
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportMarkdown, setExportMarkdown] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const pageShellRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
@@ -121,7 +89,16 @@ export function PdfViewer() {
     () => `/api/workspace/file?path=${encodeURIComponent(activePdfPath)}`,
     [activePdfPath],
   );
+  const exportUrl = useMemo(
+    () => `/api/workspace/export?path=${encodeURIComponent(activePdfPath)}&format=markdown`,
+    [activePdfPath],
+  );
   const pageWidth = Math.max(320, Math.floor((containerWidth * zoom) / 100));
+  const selectedHighlight = useMemo(
+    () => highlights.find((highlight) => (highlight.annotationId || highlight.id) === selectedHighlightKey) ?? null,
+    [highlights, selectedHighlightKey],
+  );
+  const exportFileName = `${(activePdf?.name || 'document').replace(/\.pdf$/i, '')}.highlights.md`;
 
   useEffect(() => {
     const element = containerRef.current;
@@ -150,6 +127,8 @@ export function PdfViewer() {
   useEffect(() => {
     if (!activePdfPath) {
       setHighlights([]);
+      setSelectedHighlightKey(null);
+      setDraftNote('');
       return;
     }
 
@@ -170,7 +149,7 @@ export function PdfViewer() {
           throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to load PDF annotations.');
         }
 
-        let nextHighlights = Array.isArray(data.highlights) ? data.highlights as Highlight[] : [];
+        let nextHighlights = Array.isArray(data.highlights) ? mergeHighlights(data.highlights as Highlight[]) : [];
 
         if (legacyHighlights.length > 0) {
           try {
@@ -189,7 +168,7 @@ export function PdfViewer() {
             }
 
             nextHighlights = Array.isArray(migrateData.highlights)
-              ? migrateData.highlights as Highlight[]
+              ? mergeHighlights(migrateData.highlights as Highlight[])
               : nextHighlights;
             setStoredHighlights(activePdfPath, []);
 
@@ -215,7 +194,7 @@ export function PdfViewer() {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : 'Failed to load PDF annotations.';
           const fallbackHighlights = legacyHighlights.length > 0 ? legacyHighlights : [];
-          setHighlights(fallbackHighlights);
+          setHighlights(mergeHighlights(fallbackHighlights));
           setSelectionNotice(message);
         }
       } finally {
@@ -231,6 +210,21 @@ export function PdfViewer() {
       cancelled = true;
     };
   }, [activePdfPath]);
+
+  useEffect(() => {
+    if (!selectedHighlightKey) {
+      setDraftNote('');
+      return;
+    }
+
+    if (!selectedHighlight) {
+      setSelectedHighlightKey(null);
+      setDraftNote('');
+      return;
+    }
+
+    setDraftNote(selectedHighlight.note ?? '');
+  }, [selectedHighlight, selectedHighlightKey]);
 
   useEffect(() => {
     if (viewMode !== 'scroll' || !numPages) return;
@@ -297,7 +291,7 @@ export function PdfViewer() {
     setPageNumber(nextPage);
   };
 
-  const getSelectionRects = (pageShell: HTMLDivElement | null): NormalizedHighlightRect[] => {
+  const getSelectionRects = (pageShell: HTMLDivElement | null): HighlightRect[] => {
     const selection = window.getSelection();
 
     if (!selection || !pageShell || selection.rangeCount === 0) {
@@ -306,7 +300,7 @@ export function PdfViewer() {
 
     const pageRect = pageShell.getBoundingClientRect();
     const range = selection.getRangeAt(0);
-    return Array.from(range.getClientRects())
+    return normalizeHighlightRects(Array.from(range.getClientRects())
       .map((rect) => {
         const x = Math.max(0, rect.left - pageRect.left);
         const y = Math.max(0, rect.top - pageRect.top);
@@ -324,7 +318,7 @@ export function PdfViewer() {
           height: height / pageRect.height,
         };
       })
-      .filter((rect): rect is NormalizedHighlightRect => rect !== null);
+      .filter((rect): rect is HighlightRect => rect !== null));
   };
 
   const handleHighlightSelection = async (targetPage: number, pageShell: HTMLDivElement | null) => {
@@ -352,6 +346,7 @@ export function PdfViewer() {
       text: selectedText,
       rects,
       position: rects[0],
+      note: '',
     };
     selection.removeAllRanges();
 
@@ -373,7 +368,9 @@ export function PdfViewer() {
       }
 
       const legacyHighlights = getStoredHighlights(activePdfPath);
-      setHighlights(mergeHighlights([...(data.highlights as Highlight[]), ...legacyHighlights]));
+      const nextHighlights = mergeHighlights([...(data.highlights as Highlight[]), ...legacyHighlights]);
+      setHighlights(nextHighlights);
+      setSelectedHighlightKey(null);
       setSelectionNotice(`${highlightMode === 'important' ? 'Important' : 'Unknown'} highlight saved to the PDF.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to save highlight.';
@@ -384,8 +381,8 @@ export function PdfViewer() {
   };
 
   const selectionContainsHighlightRect = (
-    selectionRect: NormalizedHighlightRect,
-    highlightRect: NormalizedHighlightRect,
+    selectionRect: HighlightRect,
+    highlightRect: HighlightRect,
   ): boolean => {
     const centerX = highlightRect.x + highlightRect.width / 2;
     const centerY = highlightRect.y + highlightRect.height / 2;
@@ -458,9 +455,17 @@ export function PdfViewer() {
         const nativeHighlights = Array.isArray(data.highlights) ? data.highlights as Highlight[] : [];
         setStoredHighlights(activePdfPath, remainingLegacyHighlights);
         setHighlights(mergeHighlights([...nativeHighlights, ...remainingLegacyHighlights]));
+        if (selectedHighlightKey && removableHighlights.some((highlight) => (
+          (highlight.annotationId || highlight.id) === selectedHighlightKey
+        ))) {
+          setSelectedHighlightKey(null);
+        }
       } else {
         setStoredHighlights(activePdfPath, remainingLegacyHighlights);
         setHighlights((current) => current.filter((highlight) => !removableIds.has(highlight.id)));
+        if (selectedHighlightKey && removableHighlights.some((highlight) => highlight.id === selectedHighlightKey)) {
+          setSelectedHighlightKey(null);
+        }
       }
 
       setSelectionNotice(`Removed ${removableIds.size} highlight${removableIds.size === 1 ? '' : 's'}.`);
@@ -470,6 +475,82 @@ export function PdfViewer() {
     } finally {
       setAnnotationSyncing(false);
     }
+  };
+
+  const handleHighlightClick = (highlight: Highlight) => {
+    if (highlightMode || eraseMode) {
+      return;
+    }
+
+    setSelectedHighlightKey(highlight.annotationId || highlight.id);
+    setSelectionNotice(null);
+  };
+
+  const handleSaveNote = async () => {
+    if (!selectedHighlight || !activePdfPath || !selectedHighlight.annotationId) {
+      return;
+    }
+
+    setNoteSaving(true);
+
+    try {
+      const res = await fetch('/api/workspace/annotations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pdfPath: activePdfPath,
+          updates: [{
+            annotationId: selectedHighlight.annotationId,
+            note: draftNote,
+          }],
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || data?.error) {
+        throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to save memo.');
+      }
+
+      setHighlights(Array.isArray(data.highlights) ? mergeHighlights(data.highlights as Highlight[]) : []);
+      setSelectionNotice(draftNote.trim() ? 'Memo saved to the PDF annotation.' : 'Memo cleared.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save memo.';
+      setSelectionNotice(message);
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
+  const handleOpenExportPreview = async () => {
+    setExportDialogOpen(true);
+    setExportLoading(true);
+
+    try {
+      const res = await fetch(exportUrl, { cache: 'no-store' });
+      const text = await res.text();
+
+      if (!res.ok) {
+        throw new Error(text || 'Failed to prepare markdown preview.');
+      }
+
+      setExportMarkdown(text);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to prepare markdown preview.';
+      setExportMarkdown(`Error: ${message}`);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const handleConfirmExport = async () => {
+    const blob = new Blob([exportMarkdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = exportFileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setExportDialogOpen(false);
   };
 
   const renderPageShell = (targetPage: number) => {
@@ -511,21 +592,31 @@ export function PdfViewer() {
             </div>
           }
         />
-        <div className="pdf-highlight-layer">
+        <div className={`pdf-highlight-layer ${!highlightMode && !eraseMode ? 'pdf-highlight-layer--interactive' : ''}`}>
           {pageHighlights.map((highlight) => {
-            const rects = highlight.rects?.length ? highlight.rects : [highlight.position];
+            const rects = getHighlightRects(highlight);
+            const highlightKey = highlight.annotationId || highlight.id;
+            const isSelected = highlightKey === selectedHighlightKey;
 
             return rects.map((rect, index) => (
-              <div
+              <button
+                type="button"
                 key={`${highlight.id}-${index}`}
-                className={`pdf-highlight-box pdf-highlight-box--${highlight.type}`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  handleHighlightClick(highlight);
+                }}
+                className={`pdf-highlight-box pdf-highlight-box--${highlight.type} ${
+                  !highlightMode && !eraseMode ? 'pdf-highlight-box--interactive' : ''
+                } ${isSelected ? 'pdf-highlight-box--selected' : ''}`}
                 style={{
                   left: `${rect.x * 100}%`,
                   top: `${rect.y * 100}%`,
                   width: `${rect.width * 100}%`,
                   height: `${rect.height * 100}%`,
                 }}
-                title={highlight.text}
+                title={highlight.note?.trim() ? `${highlight.text}\n\nMemo: ${highlight.note}` : highlight.text}
               />
             ));
           })}
@@ -672,6 +763,13 @@ export function PdfViewer() {
           >
             <Eraser size={12} strokeWidth={2} />
           </button>
+          <button
+            onClick={() => void handleOpenExportPreview()}
+            className="w-6 h-6 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
+            title="Export highlights as Markdown"
+          >
+            <FileDown size={12} strokeWidth={2} />
+          </button>
           <a
             href={fileUrl}
             download={activePdf.name}
@@ -708,6 +806,62 @@ export function PdfViewer() {
             <h1 className="text-lg font-semibold text-on-surface truncate">
               {activePdf.name}
             </h1>
+            {selectedHighlight && (
+              <div className="mt-4 rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-4 shadow-ambient">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-[10px] uppercase tracking-widest text-on-surface-variant font-medium">
+                      {selectedHighlight.type === 'important' ? 'Yellow' : 'Red'} highlight · Page {selectedHighlight.page}
+                    </div>
+                    <p className="mt-1 text-sm text-on-surface whitespace-pre-wrap break-words">
+                      {selectedHighlight.text}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSelectedHighlightKey(null)}
+                    className="shrink-0 rounded-md px-2 py-1 text-[11px] text-on-surface-variant hover:bg-surface-container-high transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="mt-3">
+                  <label className="mb-1 block text-[11px] font-medium text-on-surface-variant">
+                    Memo
+                  </label>
+                  <textarea
+                    value={draftNote}
+                    onChange={(event) => setDraftNote(event.target.value)}
+                    disabled={!selectedHighlight.annotationId || noteSaving}
+                    placeholder="Add a memo for this highlight..."
+                    className="min-h-24 w-full rounded-lg border border-outline-variant/30 bg-surface px-3 py-2 text-sm text-on-surface outline-none transition-colors focus:border-outline disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <p className="text-[11px] text-on-surface-variant">
+                      {selectedHighlight.annotationId
+                        ? 'Memo is stored with the PDF annotation.'
+                        : 'Memo editing is unavailable until annotation sync succeeds.'}
+                    </p>
+                    <button
+                      onClick={() => void handleSaveNote()}
+                      disabled={
+                        !selectedHighlight.annotationId ||
+                        noteSaving ||
+                        annotationSyncing ||
+                        draftNote === (selectedHighlight.note ?? '')
+                      }
+                      className="inline-flex items-center gap-2 rounded-md bg-on-surface px-3 py-1.5 text-[11px] font-semibold text-surface-container-lowest transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {noteSaving ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <Save size={12} strokeWidth={2} />
+                      )}
+                      {noteSaving ? 'Saving...' : 'Save memo'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="mt-2 flex items-center gap-2 text-[11px] text-on-surface-variant">
               {eraseMode ? (
                 <span>Erase mode is on. Select text over highlighted content to remove those PDF highlights.</span>
@@ -715,8 +869,10 @@ export function PdfViewer() {
                 <span>
                   {highlightMode === 'important' ? 'Important' : 'Unknown'} highlight mode is on. Select text on the page to save a PDF highlight.
                 </span>
+              ) : selectedHighlight ? (
+                <span>Highlight selected. Add or edit a memo below.</span>
               ) : (
-                <span>Selectable text can be dragged directly on PDFs that include a text layer.</span>
+                <span>Selectable text can be dragged directly on PDFs that include a text layer. Click a highlight to add a memo.</span>
               )}
               {annotationSyncing && (
                 <span className="text-outline">Syncing annotations...</span>
@@ -754,6 +910,18 @@ export function PdfViewer() {
           </div>
         </div>
       </div>
+
+      <MarkdownPreviewDialog
+        open={exportDialogOpen}
+        title="Preview Highlight Markdown"
+        description="Review the generated highlight markdown before downloading it."
+        fileName={exportFileName}
+        markdown={exportMarkdown}
+        loading={exportLoading}
+        confirmLabel="Download Markdown"
+        onCancel={() => setExportDialogOpen(false)}
+        onConfirm={handleConfirmExport}
+      />
     </div>
   );
 }

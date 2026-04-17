@@ -19,6 +19,14 @@ Annot uses your existing local Codex or Claude Code login on the same machine. N
 
 ![Annot workspace](https://raw.githubusercontent.com/rkka02/Annot/b2c5cfe1f4c6bad7aa82cfc1194269f33d95ed93/screenshots/1.png)
 
+### Highlight markdown export preview
+
+![Highlight markdown preview](https://raw.githubusercontent.com/rkka02/Annot/codex/highlight-summary-export/screenshots/highlight-markdown.png)
+
+### LLM summary markdown export preview
+
+![LLM summary markdown preview](https://raw.githubusercontent.com/rkka02/Annot/codex/highlight-summary-export/screenshots/llm-markdown.png)
+
 ### Settings
 
 ![Annot settings](https://raw.githubusercontent.com/rkka02/Annot/main/screenshots/settings.png?rev=20260330-1540)
@@ -28,12 +36,14 @@ Annot uses your existing local Codex or Claude Code login on the same machine. N
 - Real filesystem-backed workspace rooted at your home directory's `Annot` folder by default
 - Folder tree with create, rename, move, and delete actions
 - Real PDF rendering with vertical scroll mode and page mode
-- Text selection, PDF highlights, and eraser mode inside the PDF viewer
+- Text selection, PDF highlights, memo-attached highlights, and eraser mode inside the PDF viewer
 - Separate folder sessions and PDF-specific chat sessions
 - Provider-based chat runtime with support for Codex and Claude Code
 - Streaming chat output with resumable session state
 - Math rendering in chat via KaTeX
 - PDF highlights written back into the original PDF as native annotations
+- Per-PDF markdown export for yellow/red highlights with preview before download
+- Session-level markdown export for LLM-generated chat summaries with preview before download
 - Adjustable chat font size and resizable chat panel
 
 ## Requirements
@@ -128,6 +138,8 @@ Annot has two kinds of chat sessions:
 
 Each session is also tied to the provider that created it. This keeps paper-specific conversations from mixing with broader folder-level research threads and avoids switching a live session between runtimes unexpectedly.
 
+Session summaries are generated on demand when you export them. Annot uses the full saved chat history for that session, writes per-turn summaries back into the session record, and then lets you review the generated markdown before downloading it.
+
 ## Typical Workflow
 
 ### 1. Build your workspace
@@ -140,7 +152,7 @@ Open a paper and read it directly in Annot. You can switch between page mode and
 
 ### 3. Mark important passages
 
-Select text to highlight it. Use the eraser mode to remove highlights by selecting overlapping text. Annot stores these as native PDF highlight annotations in the original file.
+Select text to highlight it. Use the eraser mode to remove highlights by selecting overlapping text. Annot stores these as native PDF highlight annotations in the original file, and you can click any saved highlight to attach a memo directly to that annotation.
 
 ### 4. Ask context-aware questions
 
@@ -152,7 +164,16 @@ Use the chat panel to ask for:
 - translations
 - comparisons across papers
 
-### 5. Return later
+### 5. Export what matters
+
+Annot supports two markdown export paths:
+
+- highlight export: generate a mechanical markdown list of yellow and red highlights for the current PDF
+- summary export: generate LLM-written turn summaries from the full saved chat history for the current session
+
+Both exports open a preview dialog before download so you can inspect the markdown first.
+
+### 6. Return later
 
 Annot restores the right session for the current folder or PDF so you can continue where you left off.
 
@@ -165,6 +186,8 @@ Annot restores the right session for the current folder or PDF so you can contin
 - The default provider is configured in `Settings` and only saved after a live validation check succeeds.
 - Existing sessions stay on the provider they were created with.
 - PDF highlights are written back into the original PDF file.
+- Highlight memos are stored with the native PDF annotations.
+- Summary markdown export is generated from saved chat messages when you click `Export` in the chat panel.
 - The development flow is the main supported setup here:
 
 ```bash

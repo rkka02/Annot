@@ -26,6 +26,7 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   messages: ChatMessage[];
+  turnSummaries?: SessionTurnSummary[];
   model?: string;
 }
 
@@ -34,6 +35,16 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  model?: string;
+}
+
+export interface SessionTurnSummary {
+  id: string;
+  questionMessageId: string;
+  assistantMessageId: string;
+  question: string;
+  answerSummary: string;
+  createdAt: string;
   model?: string;
 }
 
@@ -46,6 +57,7 @@ export interface Highlight {
   page: number;
   type: 'important' | 'unknown';
   text: string;
+  note?: string;
   rects?: Array<{
     x: number;
     y: number;
